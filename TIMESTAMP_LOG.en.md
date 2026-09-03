@@ -34,3 +34,11 @@
 - Interface changes: added model status and a model-settings dialog to the workbench, synchronized model-generation status with the digital-human page, and removed source display from content editing, Q&A results, and sample content.
 - Verification: all 21 Node tests passed and `npm audit --omit=dev` reported zero vulnerabilities; a real browser completed configuration saving, key non-disclosure, connection testing, and answer generation on desktop and 390 px mobile layouts with zero console errors or warnings; Docker verified model calls, `0600` permissions, and persistence across a named-volume restart.
 - Status: the local prototype was running at `http://127.0.0.1:8080` with the model intentionally left unconfigured; test keys, containers, and volumes had been removed.
+
+## 2026-09-03 23:30 +0800
+
+- Task: publish the current digital-human project to GitHub as a public repository.
+- Repository: `https://github.com/bd4rex/dafuture-digital-human`; the default branch is `main`, and the GitHub API confirmed its visibility as `PUBLIC`.
+- Commit: the first public content commit is `f5c9629065ea9ebbb38b53a241bfcd013aea309c`; it contains the project plans, runnable prototype, demo media, Chinese and English documentation, and verification records.
+- Pre-publication cleanup: ignored local render artifacts, dependencies, test output, environment files, private keys, and private model configuration; removed the user-specific absolute path from the document generator; no real API key was committed.
+- Verification: all 21 automated tests passed, the production dependency audit reported zero vulnerabilities, all relative Markdown links resolved, and the committed content contained no detected user-specific absolute path, private-network address, or common real-secret pattern.
