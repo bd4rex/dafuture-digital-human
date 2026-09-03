@@ -26,7 +26,8 @@ By default, the service listens only on the local machine:
 
 - `http://127.0.0.1:8080/`: content and model configuration workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
-- `http://127.0.0.1:8080/health`: service health status.
+- `http://127.0.0.1:8080/health`: service diagnostics and dependency state.
+- `http://127.0.0.1:8080/ready`: Q&A readiness check.
 
 See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, API, Docker, and security instructions.
 
@@ -37,6 +38,7 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 - Send a user question and managed content to the model through `POST /answer`.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
 - Support content hot reload, atomic saves, revision conflict detection, same-origin local restrictions, and an optional administration key.
+- Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
 - Sanitize upstream model errors so API keys and upstream details are not exposed to the frontend.
 
 ## Repository Layout
@@ -68,7 +70,7 @@ npm test
 npm audit --omit=dev
 ```
 
-The current suite contains 21 automated tests covering model-configuration security, model-backed Q&A, content hot reload, access control, error sanitization, the avatar state machine, and video range requests.
+The current suite contains 25 automated tests covering candidate rollback, Q&A readiness, response-contract semantics, quick-question synchronization, model-configuration security, content hot reload, access control, error sanitization, the avatar state machine, and video range requests.
 
 ## Security Boundary for the Public Repository
 

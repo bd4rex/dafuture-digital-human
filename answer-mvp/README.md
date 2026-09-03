@@ -19,7 +19,8 @@ npm start
 
 - `http://127.0.0.1:8080/`：内容与模型配置工作台。
 - `http://127.0.0.1:8080/avatar`：面向访客的数字人问答前台。
-- `http://127.0.0.1:8080/health`：服务、内容和模型配置状态。
+- `http://127.0.0.1:8080/health`：服务诊断、内容版本和模型连接状态（始终返回 HTTP 200）。
+- `http://127.0.0.1:8080/ready`：问答就绪检查；不可用时返回 HTTP 503。
 
 首次启动时模型处于“等待配置”状态。打开工作台，点击“模型设置”，至少填写：
 
@@ -27,7 +28,7 @@ npm start
 2. API Key。
 3. 模型名称，即服务商提供的模型 ID。
 
-点击“保存设置”只保存配置；点击“保存并测试连接”会额外发起一次很短的真实模型请求，可能产生少量费用。
+点击“保存并测试连接”会先用候选配置发起一次很短的真实模型请求，验证成功后才落盘并切换。通过“保存设置”修改 API 地址、Key 或模型名时也采用同一保护；只调整回答范围、参数或提示词时不会重复测试。模型请求可能产生少量费用。
 
 ## 模型配置安全
 
@@ -36,6 +37,7 @@ npm start
 - API Key 仅由服务端读取，`GET /api/model-config` 永不返回 Key 明文。
 - 页面重新打开后只显示“服务器已保存”，Key 输入框保持空白。
 - 留空保存会保留已有 Key；只有勾选“清除服务器上已保存的 API Key”才会删除。
+- 完整的连接配置在变更时会先独立验证；验证失败会保留原有内存配置、磁盘文件和可用状态。
 - 文件以 `0600` 权限原子写入，并已加入 `.gitignore`。
 - 仓库只提供不含真实 Key 的 `model-config.example.json`。
 
@@ -88,7 +90,7 @@ npm start
 http://127.0.0.1:8080/avatar?preview=1
 ```
 
-视频替换方法见 `public/avatar-media/README.md`；数字人名称、欢迎语、主持词、快捷问题和素材路径在 `public/avatar-config.json` 中配置。
+视频替换方法见 `public/avatar-media/README.md`；数字人名称、欢迎语、主持词和素材路径在 `public/avatar-config.json` 中配置。访客快捷问题统一取自 `content.json` 排名前三条内容的第一种问法；在工作台调整内容或顺序后，访客页会按内容版本自动刷新。
 
 ## 接口契约
 
@@ -107,14 +109,19 @@ http://127.0.0.1:8080/avatar?preview=1
 ```json
 {
   "answered": true,
+  "answerStatus": "answered",
+  "answerStatusSource": "structured",
   "answer": "模型结合后台内容生成的回答。",
   "speechText": "模型结合后台内容生成的回答。",
   "model": "已配置的模型 ID",
-  "references": [
-    { "id": "frontend-integration" }
-  ]
+  "knowledgeContext": {
+    "contextIds": ["frontend-integration", "project-introduction"],
+    "matchedIds": ["frontend-integration"]
+  }
 }
 ```
+
+`answerStatus` 是回答/拒答的主状态，`answered` 仅为兼容旧前端的布尔值。服务优先读取模型返回的结构化状态；不支持结构化输出的兼容服务会标记 `answerStatusSource: "inferred"` 并使用稳健的拒答识别。`knowledgeContext.contextIds` 表示实际发送给模型的内容条目，`matchedIds` 表示服务端启发式匹配到的条目；两者都不声称模型在答案中引用或实际采用了某一条内容。
 
 模型未配置时返回 HTTP `503`：
 
@@ -132,11 +139,17 @@ http://127.0.0.1:8080/avatar?preview=1
 
 ### 模型配置接口
 
-- `GET /api/model-config`：读取非敏感设置和 `hasApiKey` 状态。
-- `PUT /api/model-config`：保存设置；空 Key 保留旧值。
+- `GET /api/model-config`：读取非敏感设置、`hasApiKey` 和最近一次连接状态。
+- `PUT /api/model-config`：保存设置；空 Key 保留旧值。完整连接字段发生变化时先验证后切换，也可显式发送 `testConnection: true`。
 - `POST /api/model-config/test`：使用已保存设置发起一次连接测试。
 
 模型接口与 `GET/PUT /api/content` 使用相同的后台访问保护。
+
+### 健康与就绪接口
+
+- `GET /health` 始终返回 HTTP 200，用于读取 `ready`、内容版本以及模型的 `unconfigured`、`unverified`、`available` 或 `unavailable` 状态。
+- `GET /ready` 返回同一结构；只有内容可服务且模型已完整配置、未处于已知不可用状态时返回 HTTP 200，否则返回 HTTP 503。Docker 健康检查使用此接口。
+- 内容文件损坏但仍有上一有效版本时，服务保持 `ready: true`，整体状态为 `degraded`；已知模型调用失败时则为 `ready: false` 和 `not_ready`。
 
 ## 后台访问保护
 
@@ -156,7 +169,7 @@ HOST=0.0.0.0 ADMIN_API_KEY='请替换为随机管理密钥' npm start
 
 - 新文件校验成功时，整份内容一次性切换。
 - 新文件格式错误时，继续使用上一份有效内容，并把健康状态标记为 `degraded`。
-- 文件修复后自动恢复为 `ok`。
+- 文件修复后自动恢复为 `ready`。
 
 每条内容需要唯一 `id`、非空 `questions`、非空 `keywords` 和 `answer`。其中 `answer` 表示交给模型参考的已确认内容。
 
@@ -166,7 +179,7 @@ HOST=0.0.0.0 ADMIN_API_KEY='请替换为随机管理密钥' npm start
 npm test
 ```
 
-测试覆盖模型配置的保存与清除、Key 不回显和文件权限、OpenAI 兼容请求结构、模型上下文、明确拒答、上游错误脱敏、配置接口鉴权、内容热加载、数字人状态机和视频 Range 请求。
+当前 25 项测试覆盖候选模型配置失败回滚、健康与就绪状态、Key 不回显和文件权限、OpenAI 兼容请求结构、结构化回答状态、知识上下文语义、快捷问题同步、上游错误脱敏、配置接口鉴权、内容热加载、数字人状态机和视频 Range 请求。
 
 ## Docker 运行
 

@@ -562,9 +562,19 @@ function setModelStatus(config) {
     elements.modelStatus.textContent = '无法读取';
     return;
   }
-  elements.modelStatus.textContent = config.configured
-    ? `${config.model} · 已配置`
-    : '等待配置';
+  if (!config.configured) {
+    elements.modelStatus.textContent = '等待配置';
+    return;
+  }
+
+  const connectionStatus = config.connection?.status;
+  const label =
+    connectionStatus === 'available'
+      ? '连接可用'
+      : connectionStatus === 'unavailable'
+        ? '连接异常'
+        : '待验证';
+  elements.modelStatus.textContent = `${config.model} · ${label}`;
 }
 
 function populateModelForm(config) {
@@ -641,45 +651,54 @@ function setModelFormBusy(busy) {
   elements.cancelModelSettings.disabled = busy;
 }
 
-async function testModelConnection() {
-  elements.modelMessage.textContent = '正在发起一次模型连接测试…';
-  elements.modelMessage.classList.remove('success');
-  const result = await requestJson('/api/model-config/test', {
-    method: 'POST',
-    admin: true,
-  });
-  elements.modelMessage.textContent = `连接成功：${result.model}，耗时 ${result.latencyMs} ms。`;
-  elements.modelMessage.classList.add('success');
-  showToast('大语言模型连接测试成功。');
-}
-
 async function saveModelConfig(event) {
   event.preventDefault();
   if (state.modelSaving || !elements.modelForm.reportValidity()) {
     return;
   }
 
-  const shouldTest = event.submitter?.dataset.action === 'test';
+  const requestBody = modelRequestFromForm();
+  const connectionChanged =
+    requestBody.baseUrl !== (state.modelConfig?.baseUrl ?? '') ||
+    requestBody.model !== (state.modelConfig?.model ?? '') ||
+    Boolean(requestBody.apiKey.trim()) ||
+    requestBody.clearApiKey;
+  const candidateHasApiKey = requestBody.clearApiKey
+    ? false
+    : Boolean(requestBody.apiKey.trim() || state.modelConfig?.hasApiKey);
+  const candidateConfigured = Boolean(
+    requestBody.baseUrl && requestBody.model && candidateHasApiKey,
+  );
+  const shouldTest =
+    event.submitter?.dataset.action === 'test' ||
+    (connectionChanged && candidateConfigured);
   setModelFormBusy(true);
-  elements.modelMessage.textContent = '正在安全保存模型设置…';
+  elements.modelMessage.textContent = shouldTest
+    ? '正在验证候选设置；验证成功后才会切换…'
+    : '正在安全保存模型设置…';
   elements.modelMessage.classList.remove('success');
 
   try {
     const config = await requestJson('/api/model-config', {
       method: 'PUT',
       admin: true,
-      body: modelRequestFromForm(),
+      body: {
+        ...requestBody,
+        testConnection: shouldTest,
+      },
     });
     state.modelConfig = config;
     setModelStatus(config);
     populateModelForm(config);
-    elements.modelMessage.textContent = config.configured
-      ? '模型设置已保存，API Key 不会在页面回显。'
-      : '设置已保存，但 API 地址、Key 或模型名尚未完整配置。';
+    elements.modelMessage.textContent = config.connectionTest
+      ? `连接成功：${config.connectionTest.model}，耗时 ${config.connectionTest.latencyMs} ms；新设置已生效。`
+      : config.configured
+        ? '模型设置已保存但尚未验证，API Key 不会在页面回显。'
+        : '设置已保存，但 API 地址、Key 或模型名尚未完整配置。';
     elements.modelMessage.classList.add('success');
 
     if (shouldTest) {
-      await testModelConnection();
+      showToast('候选模型设置验证成功并已生效。');
     } else {
       showToast('模型设置已保存。');
       elements.modelDialog.close();
@@ -696,16 +715,27 @@ async function saveModelConfig(event) {
 async function refreshHealth() {
   try {
     const health = await requestJson('/health');
-    if (health.status === 'ok') {
-      setServiceStatus('online', '运行正常');
+    if (!health.ready) {
+      setServiceStatus(
+        'offline',
+        health.model?.status === 'unconfigured'
+          ? '问答模型待配置'
+          : '问答服务不可用',
+      );
+    } else if (health.content?.status === 'stale') {
+      setServiceStatus('online', '可用，内容为上一有效版本');
+    } else if (health.model?.status === 'unverified') {
+      setServiceStatus('online', '可用，模型尚未验证');
     } else {
-      setServiceStatus('offline', '内容文件异常');
+      setServiceStatus('online', '运行正常');
     }
     if (health.model) {
-      elements.modelStatus.textContent =
-        health.model.status === 'configured'
-          ? `${health.model.model} · 已配置`
-          : '等待配置';
+      const modelConfig = {
+        configured: health.model.configured,
+        model: health.model.model,
+        connection: { status: health.model.status },
+      };
+      setModelStatus(modelConfig);
     }
   } catch {
     setServiceStatus('offline', '无法连接');
@@ -731,8 +761,11 @@ async function testQuestion(event) {
       method: 'POST',
       body: { question },
     });
+    const answered = result.answerStatus
+      ? result.answerStatus === 'answered'
+      : result.answered;
     elements.answerCard.className = `answer-card ${
-      result.answered ? 'answer-success' : 'answer-missing'
+      answered ? 'answer-success' : 'answer-missing'
     }`;
     elements.answerText.textContent = result.answer;
     if (result.model) {

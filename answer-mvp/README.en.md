@@ -19,7 +19,8 @@ By default, the service listens only on `http://127.0.0.1:8080`:
 
 - `http://127.0.0.1:8080/`: content and model configuration workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
-- `http://127.0.0.1:8080/health`: service, content, and model configuration status.
+- `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
+- `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
 
 The model is initially unconfigured. Open the workbench, select “Model Settings,” and provide at least:
 
@@ -27,7 +28,7 @@ The model is initially unconfigured. Open the workbench, select “Model Setting
 2. An API key.
 3. The model name, using the model ID supplied by the provider.
 
-“Save Settings” stores the configuration only. “Save and Test Connection” also sends a very small real model request, which may incur a small charge.
+“Save and Test Connection” first sends a very small real request with the candidate configuration, then persists and activates it only after validation succeeds. The same protection applies when “Save Settings” changes the API URL, key, or model name; changing only answer scope, generation parameters, or the system prompt does not repeat the test. Model requests may incur a small charge.
 
 ## Model Configuration Security
 
@@ -36,6 +37,7 @@ Model settings are written to a separate `model-config.json` file rather than `c
 - The API key is read only by the server. `GET /api/model-config` never returns the plaintext key.
 - When the page is reopened, it only reports that a key is stored; the key field remains blank.
 - Saving with a blank key keeps the existing key. The key is removed only when “Clear the API key stored on the server” is explicitly selected.
+- A complete connection configuration is validated independently before activation whenever its connection fields change. A failed candidate leaves the active in-memory configuration, disk file, and availability state unchanged.
 - The file is written atomically with `0600` permissions and is included in `.gitignore`.
 - The repository contains only `model-config.example.json`, which has no real key.
 
@@ -88,7 +90,7 @@ Preview all four states manually:
 http://127.0.0.1:8080/avatar?preview=1
 ```
 
-See `public/avatar-media/README.en.md` for video replacement instructions. Configure the digital-human name, welcome text, host script, quick questions, and media paths in `public/avatar-config.json`.
+See `public/avatar-media/README.en.md` for video replacement instructions. Configure the digital-human name, welcome text, host script, and media paths in `public/avatar-config.json`. Visitor quick questions come from the first phrasing of the first three `content.json` entries; the visitor page refreshes them by content revision after workbench edits or reordering.
 
 ## API Contract
 
@@ -107,14 +109,19 @@ When the model is configured and the request succeeds:
 ```json
 {
   "answered": true,
+  "answerStatus": "answered",
+  "answerStatusSource": "structured",
   "answer": "An answer generated from the managed content.",
   "speechText": "An answer generated from the managed content.",
   "model": "configured-model-id",
-  "references": [
-    { "id": "frontend-integration" }
-  ]
+  "knowledgeContext": {
+    "contextIds": ["frontend-integration", "project-introduction"],
+    "matchedIds": ["frontend-integration"]
+  }
 }
 ```
+
+`answerStatus` is the primary answered/refusal state, while `answered` remains as a compatibility boolean for older clients. The service prefers the model's structured status; compatible providers that cannot return structured output are marked with `answerStatusSource: "inferred"` and use robust refusal detection. `knowledgeContext.contextIds` lists the entries actually sent to the model, while `matchedIds` lists entries selected by the server's relevance heuristic. Neither field claims that the model cited or actually relied on a particular entry in its answer.
 
 When the model is not configured, the endpoint returns HTTP `503`:
 
@@ -132,11 +139,17 @@ Questions are limited to 500 characters. Use `CORS_ORIGIN` to restrict the permi
 
 ### Model Configuration Endpoints
 
-- `GET /api/model-config`: returns non-sensitive settings and the `hasApiKey` state.
-- `PUT /api/model-config`: saves settings; a blank key preserves the existing key.
+- `GET /api/model-config`: returns non-sensitive settings, `hasApiKey`, and the latest connection state.
+- `PUT /api/model-config`: saves settings; a blank key preserves the existing key. Changed complete connection fields are validated before activation; clients may also send `testConnection: true` explicitly.
 - `POST /api/model-config/test`: sends a connection test using the saved settings.
 
 The model endpoints and `GET/PUT /api/content` use the same administration-access protection.
+
+### Health and Readiness Endpoints
+
+- `GET /health` always returns HTTP 200 and reports `ready`, the active content revision, and model state as `unconfigured`, `unverified`, `available`, or `unavailable`.
+- `GET /ready` returns the same payload. It returns HTTP 200 only when content can be served and the model is fully configured without a known connection failure; otherwise it returns HTTP 503. Docker uses this endpoint for its health check.
+- If a damaged content file leaves a previous valid version available, the service remains `ready: true` with overall state `degraded`. A known model-call failure changes it to `ready: false` and `not_ready`.
 
 ## Administration Access Protection
 
@@ -156,7 +169,7 @@ The web workbench is recommended, but the file can also be edited directly. By d
 
 - When a new file passes validation, the complete content set is activated atomically.
 - When the new file is invalid, the previous valid content remains active and health status changes to `degraded`.
-- Health status returns to `ok` after the file is corrected.
+- Health status returns to `ready` after the file is corrected.
 
 Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. Here, `answer` is confirmed material supplied to the model as context.
 
@@ -166,7 +179,7 @@ Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, 
 npm test
 ```
 
-The tests cover saving and clearing model settings, preventing key disclosure, file permissions, OpenAI-compatible request structure, model context, explicit refusal, upstream-error sanitization, configuration authorization, content hot reload, the digital-human state machine, and video range requests.
+The current 25 tests cover failed candidate-model rollback, health and readiness state, key non-disclosure and file permissions, OpenAI-compatible request structure, structured answer status, knowledge-context semantics, quick-question synchronization, upstream-error sanitization, configuration authorization, content hot reload, the digital-human state machine, and video range requests.
 
 ## Docker
 

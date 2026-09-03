@@ -4,10 +4,8 @@ const DEFAULT_CONFIG = Object.freeze({
   characterName: '小未',
   welcomeText: '你好，我是大未来数字助手。请问有什么可以帮你？',
   presentationText: '大家好，欢迎来到大未来数字人问答体验。',
-  quickQuestions: [
-    '这个数字人问答原型能做什么？',
-    '前台怎么调用问答接口？',
-  ],
+  quickQuestions: [],
+  contentRevision: null,
   states: {
     idle: { label: '随时可以开始', hint: '等待你的问题', sources: [] },
     thinking: { label: '正在思考', hint: '正在调用大语言模型', sources: [] },
@@ -221,10 +219,11 @@ class AvatarVideoSwitcher {
   }
 }
 
-async function loadConfig() {
+async function loadConfig(fallback = DEFAULT_CONFIG) {
   try {
     const response = await fetch('/avatar-config.json', {
       headers: { Accept: 'application/json' },
+      cache: 'no-store',
     });
     if (!response.ok) {
       throw new Error(`配置请求失败（${response.status}）`);
@@ -238,7 +237,19 @@ async function loadConfig() {
     return config;
   } catch (error) {
     console.warn('数字人配置加载失败，使用内置降级配置。', error);
-    return DEFAULT_CONFIG;
+    return fallback;
+  }
+}
+
+function applyConfig(config) {
+  runtime.config = config;
+  elements.avatarName.textContent = config.characterName;
+  elements.welcomeMessage.textContent = config.welcomeText;
+  runtime.videoSwitcher?.configure(config.states);
+  setMediaNote();
+  renderQuickQuestions();
+  if (runtime.flow) {
+    updateStateUI(runtime.flow.state);
   }
 }
 
@@ -259,12 +270,27 @@ async function refreshHealth() {
       throw new Error(`HTTP ${response.status}`);
     }
     const health = await response.json();
-    if (health.model?.status === 'unconfigured') {
+    if (!health.ready) {
       setServiceStatus('offline', '问答模型待配置');
-    } else if (health.status === 'ok') {
-      setServiceStatus('online', '模型与内容服务正常');
+      if (health.model?.status === 'unavailable') {
+        setServiceStatus('offline', '问答模型连接异常');
+      }
+    } else if (health.content?.status === 'stale') {
+      setServiceStatus('online', '问答可用，内容为上一有效版本');
+    } else if (health.model?.status === 'unverified') {
+      setServiceStatus('online', '问答可用，模型连接待验证');
     } else {
-      setServiceStatus('offline', '内容服务使用上一有效版本');
+      setServiceStatus('online', '模型与内容服务正常');
+    }
+
+    if (
+      health.content?.revision &&
+      health.content.revision !== runtime.config.contentRevision
+    ) {
+      const nextConfig = await loadConfig(runtime.config);
+      if (nextConfig.contentRevision !== runtime.config.contentRevision) {
+        applyConfig(nextConfig);
+      }
     }
   } catch {
     setServiceStatus('offline', '内容服务不可用');
@@ -589,11 +615,7 @@ function bindEvents() {
 }
 
 async function start() {
-  runtime.config = await loadConfig();
-  elements.avatarName.textContent = runtime.config.characterName;
-  elements.welcomeMessage.textContent = runtime.config.welcomeText;
-  setMediaNote();
-  renderQuickQuestions();
+  applyConfig(await loadConfig());
 
   runtime.videoSwitcher = new AvatarVideoSwitcher({
     stage: elements.stage,

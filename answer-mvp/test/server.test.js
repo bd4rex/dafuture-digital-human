@@ -37,9 +37,18 @@ const MODEL_REQUEST = {
   systemPrompt: '你是测试数字人，请准确回答。',
 };
 
-function createMockLlm({ answer = '这是模型生成的测试回答。', status = 200 } = {}) {
+function createMockLlm({
+  answer = '这是模型生成的测试回答。',
+  status = 200,
+  responses = null,
+} = {}) {
   const calls = [];
   const fetch = async (url, request) => {
+    const responseConfig = {
+      answer,
+      status,
+      ...(responses?.[calls.length] ?? {}),
+    };
     calls.push({
       url: String(url),
       headers: new Headers(request.headers),
@@ -47,15 +56,15 @@ function createMockLlm({ answer = '这是模型生成的测试回答。', status
     });
     return new Response(
       JSON.stringify(
-        status >= 400
+        responseConfig.status >= 400
           ? { error: { message: '上游内部详情不应返回给前台' } }
           : {
-              model: 'mock-model-resolved',
-              choices: [{ message: { content: answer } }],
+              model: responseConfig.model ?? 'mock-model-resolved',
+              choices: [{ message: { content: responseConfig.answer ?? answer } }],
             },
       ),
       {
-        status,
+        status: responseConfig.status,
         headers: { 'content-type': 'application/json' },
       },
     );
@@ -70,12 +79,14 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
   const contentPath = path.join(temporaryDirectory, 'content.json');
   const modelConfigPath = path.join(temporaryDirectory, 'model-config.json');
   await writeFile(contentPath, JSON.stringify(content), 'utf8');
+  const defaultMock = createMockLlm();
 
   const app = await buildApp({
     contentPath,
     modelConfigPath,
     pollIntervalMs: 25,
     logger: false,
+    llmFetch: defaultMock.fetch,
     ...options,
   });
 
@@ -143,6 +154,36 @@ test('数字人前台和四态配置可直接访问', async (t) => {
     'speaking',
     'presenting',
   ]);
+  assert.deepEqual(configResponse.json().quickQuestions, [
+    '培训地点在哪里？',
+    '什么是大未来项目？',
+  ]);
+  assert.match(configResponse.json().contentRevision, /^[a-f0-9]{64}$/);
+});
+
+test('访客快捷问题随内容工作台保存结果和版本号更新', async (t) => {
+  const { app } = await createTestApp(t);
+  const loaded = (
+    await app.inject({ method: 'GET', url: '/api/content' })
+  ).json();
+  loaded.items[0].questions[0] = '更新后的培训地点问题？';
+
+  const saved = await app.inject({
+    method: 'PUT',
+    url: '/api/content',
+    payload: { revision: loaded.revision, items: loaded.items },
+  });
+  assert.equal(saved.statusCode, 200);
+
+  const config = (
+    await app.inject({ method: 'GET', url: '/avatar-config.json' })
+  ).json();
+  assert.deepEqual(config.quickQuestions, [
+    '更新后的培训地点问题？',
+    '什么是大未来项目？',
+  ]);
+  assert.equal(config.contentRevision, saved.json().revision);
+  assert.notEqual(config.contentRevision, loaded.revision);
 });
 
 test('透明视频支持 Range 请求并拒绝非白名单文件', async (t) => {
@@ -209,7 +250,7 @@ test('Web 保存的新内容会进入模型上下文，不再被直接作为答�
   assert.equal(answerResponse.statusCode, 200);
   assert.equal(answerResponse.json().answer, '模型重新组织后的地点说明。');
   assert.match(
-    mock.calls[0].body.messages[1].content,
+    mock.calls.at(-1).body.messages[1].content,
     /通过 Web 页面更新后的测试地点/,
   );
 });
@@ -280,6 +321,18 @@ test('模型初始为未配置，提问会返回明确的 503', async (t) => {
   assert.equal(config.hasApiKey, false);
   assert.equal(config.apiKey, undefined);
 
+  const health = (
+    await app.inject({ method: 'GET', url: '/health' })
+  ).json();
+  assert.equal(health.status, 'not_ready');
+  assert.equal(health.ready, false);
+  assert.equal(health.content.ready, true);
+  assert.equal(health.model.status, 'unconfigured');
+  assert.equal(
+    (await app.inject({ method: 'GET', url: '/ready' })).statusCode,
+    503,
+  );
+
   const response = await app.inject({
     method: 'POST',
     url: '/answer',
@@ -290,6 +343,74 @@ test('模型初始为未配置，提问会返回明确的 503', async (t) => {
   assert.equal(response.json().answer, MODEL_NOT_CONFIGURED_TEXT);
 });
 
+test('模型验证成功后健康检查与就绪检查共同反映问答可用', async (t) => {
+  const mock = createMockLlm({ answer: '连接成功。' });
+  const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
+    llmFetch: mock.fetch,
+  });
+  const saved = await configureModel(app);
+  assert.equal(saved.statusCode, 200);
+
+  const health = (
+    await app.inject({ method: 'GET', url: '/health' })
+  ).json();
+  assert.equal(health.status, 'ready');
+  assert.equal(health.ready, true);
+  assert.equal(health.model.status, 'available');
+  assert.equal(health.model.errorCode, null);
+  assert.match(health.content.revision, /^[a-f0-9]{64}$/);
+
+  const readiness = await app.inject({ method: 'GET', url: '/ready' });
+  assert.equal(readiness.statusCode, 200);
+  assert.equal(readiness.json().ready, true);
+});
+
+test('错误候选模型验证失败时保留原有内存、磁盘和可用状态', async (t) => {
+  const mock = createMockLlm({
+    responses: [
+      { answer: '旧配置连接成功。', status: 200 },
+      { status: 401 },
+      { answer: '旧配置继续回答。', status: 200 },
+    ],
+  });
+  const { app, modelConfigPath } = await createTestApp(t, ORIGINAL_CONTENT, {
+    llmFetch: mock.fetch,
+  });
+  assert.equal((await configureModel(app)).statusCode, 200);
+  const originalDiskConfig = JSON.parse(await readFile(modelConfigPath, 'utf8'));
+
+  const rejected = await configureModel(app, {
+    apiKey: 'wrong-provider-secret',
+    model: 'wrong-model',
+  });
+  assert.equal(rejected.statusCode, 502);
+  assert.equal(rejected.json().error, 'MODEL_UPSTREAM_ERROR');
+
+  const activeConfig = (
+    await app.inject({ method: 'GET', url: '/api/model-config' })
+  ).json();
+  assert.equal(activeConfig.model, MODEL_REQUEST.model);
+  assert.equal(activeConfig.connection.status, 'available');
+  assert.deepEqual(
+    JSON.parse(await readFile(modelConfigPath, 'utf8')),
+    originalDiskConfig,
+  );
+
+  const answer = await app.inject({
+    method: 'POST',
+    url: '/answer',
+    payload: { question: '培训地点在哪里？' },
+  });
+  assert.equal(answer.statusCode, 200);
+  assert.equal(answer.json().answer, '旧配置继续回答。');
+  assert.equal(mock.calls[1].body.model, 'wrong-model');
+  assert.equal(mock.calls[2].body.model, MODEL_REQUEST.model);
+  assert.equal(
+    mock.calls[2].headers.get('authorization'),
+    `Bearer ${MODEL_REQUEST.apiKey}`,
+  );
+});
+
 test('模型设置单独落盘为 0600，API Key 永不回显', async (t) => {
   const { app, modelConfigPath } = await createTestApp(t);
   const savedResponse = await configureModel(app);
@@ -297,6 +418,8 @@ test('模型设置单独落盘为 0600，API Key 永不回显', async (t) => {
   assert.equal(savedResponse.json().configured, true);
   assert.equal(savedResponse.json().hasApiKey, true);
   assert.equal(savedResponse.json().apiKey, undefined);
+  assert.equal(savedResponse.json().connection.status, 'available');
+  assert.equal(savedResponse.json().connectionTest.ok, true);
 
   const diskConfig = JSON.parse(await readFile(modelConfigPath, 'utf8'));
   assert.equal(diskConfig.apiKey, MODEL_REQUEST.apiKey);
@@ -345,21 +468,28 @@ test('问答通过 OpenAI 兼容接口生成，并携带知识上下文', async 
   assert.equal(body.answer, '这是模型生成的测试回答。');
   assert.equal(body.speechText, body.answer);
   assert.equal(body.model, 'mock-model-resolved');
-  assert.deepEqual(body.references, [{ id: 'training-location' }]);
+  assert.equal(body.answerStatus, 'answered');
+  assert.equal(body.answerStatusSource, 'inferred');
+  assert.deepEqual(body.knowledgeContext, {
+    contextIds: ['training-location', 'project-introduction'],
+    matchedIds: ['training-location'],
+  });
+  assert.equal(body.references, undefined);
   assert.equal(body.source, undefined);
-  assert.equal(mock.calls[0].url, 'https://model.example/v1/chat/completions');
+  assert.equal(mock.calls.at(-1).url, 'https://model.example/v1/chat/completions');
   assert.equal(
-    mock.calls[0].headers.get('authorization'),
+    mock.calls.at(-1).headers.get('authorization'),
     `Bearer ${MODEL_REQUEST.apiKey}`,
   );
-  assert.equal(mock.calls[0].body.model, MODEL_REQUEST.model);
-  assert.match(mock.calls[0].body.messages[0].content, /只能依据后台知识内容/);
-  assert.match(mock.calls[0].body.messages[1].content, /培训地点为测试教室/);
-  assert.doesNotMatch(mock.calls[0].body.messages[1].content, /资料来源/);
+  assert.equal(mock.calls.at(-1).body.model, MODEL_REQUEST.model);
+  assert.match(mock.calls.at(-1).body.messages[0].content, /只能依据后台知识内容/);
+  assert.match(mock.calls.at(-1).body.messages[0].content, /只返回一个 JSON 对象/);
+  assert.match(mock.calls.at(-1).body.messages[1].content, /培训地点为测试教室/);
+  assert.doesNotMatch(mock.calls.at(-1).body.messages[1].content, /资料来源/);
 });
 
-test('模型按约定拒答时 answered 为 false', async (t) => {
-  const mock = createMockLlm({ answer: NO_ANSWER_TEXT });
+test('模型拒答附带补充说明时仍稳定识别为 no_answer', async (t) => {
+  const mock = createMockLlm({ answer: `${NO_ANSWER_TEXT}建议联系工作人员。` });
   const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
   });
@@ -372,6 +502,33 @@ test('模型按约定拒答时 answered 为 false', async (t) => {
   });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().answered, false);
+  assert.equal(response.json().answerStatus, 'no_answer');
+  assert.equal(response.json().answerStatusSource, 'inferred');
+  assert.equal(response.json().answer, NO_ANSWER_TEXT);
+  assert.deepEqual(response.json().knowledgeContext.matchedIds, []);
+});
+
+test('模型结构化状态作为 answered 的首要依据', async (t) => {
+  const mock = createMockLlm({
+    answer: JSON.stringify({
+      status: 'no_answer',
+      answer: '模型自行生成的不同拒答措辞。',
+    }),
+  });
+  const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
+    llmFetch: mock.fetch,
+  });
+  await configureModel(app);
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/answer',
+    payload: { question: '今天食堂吃什么？' },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().answered, false);
+  assert.equal(response.json().answerStatus, 'no_answer');
+  assert.equal(response.json().answerStatusSource, 'structured');
   assert.equal(response.json().answer, NO_ANSWER_TEXT);
 });
 
@@ -389,11 +546,16 @@ test('保存并测试模型连接会走同一 OpenAI 兼容接口', async (t) =>
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
   assert.equal(response.json().model, 'mock-model-resolved');
-  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls.length, 2);
 });
 
 test('上游错误被转换为安全提示，不泄露 API Key 或上游详情', async (t) => {
-  const mock = createMockLlm({ status: 401 });
+  const mock = createMockLlm({
+    responses: [
+      { answer: '连接成功。', status: 200 },
+      { status: 401 },
+    ],
+  });
   const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
   });
@@ -408,6 +570,17 @@ test('上游错误被转换为安全提示，不泄露 API Key 或上游详情',
   assert.equal(response.json().error, 'MODEL_UPSTREAM_ERROR');
   assert.doesNotMatch(response.body, new RegExp(MODEL_REQUEST.apiKey));
   assert.doesNotMatch(response.body, /上游内部详情/);
+
+  const health = (
+    await app.inject({ method: 'GET', url: '/health' })
+  ).json();
+  assert.equal(health.ready, false);
+  assert.equal(health.status, 'not_ready');
+  assert.equal(health.model.status, 'unavailable');
+  assert.equal(
+    (await app.inject({ method: 'GET', url: '/ready' })).statusCode,
+    503,
+  );
 });
 
 test('空问题、额外字段和无效模型配置会被拒绝', async (t) => {
@@ -444,6 +617,7 @@ test('无效 content.json 不替换上一有效上下文，修复后自动恢复
   await waitUntil(async () => {
     const health = await app.inject({ method: 'GET', url: '/health' });
     assert.equal(health.json().status, 'degraded');
+    assert.equal(health.json().ready, true);
   });
 
   await app.inject({
@@ -461,7 +635,8 @@ test('无效 content.json 不替换上一有效上下文，修复后自动恢复
   await writeFile(contentPath, JSON.stringify(updatedContent), 'utf8');
   await waitUntil(async () => {
     const health = await app.inject({ method: 'GET', url: '/health' });
-    assert.equal(health.json().status, 'ok');
+    assert.equal(health.json().status, 'ready');
+    assert.equal(health.json().ready, true);
     await app.inject({
       method: 'POST',
       url: '/answer',
