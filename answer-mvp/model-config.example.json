@@ -1,0 +1,11 @@
+{
+  "provider": "openai-compatible",
+  "baseUrl": "https://your-model-service.example/v1",
+  "apiKey": "",
+  "model": "your-model-id",
+  "answerMode": "grounded",
+  "temperature": 0.2,
+  "maxTokens": 800,
+  "timeoutMs": 30000,
+  "systemPrompt": "你是“大未来”数字人问答助手。请结合后台已配置的内容回答用户问题。回答应准确、简洁、自然，适合直接显示和播报。涉及日期、地点、费用、人员、规则等事实时不得猜测。"
+}

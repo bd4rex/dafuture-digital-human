@@ -1,0 +1,15 @@
+.DS_Store
+.work_content_proposal/
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+answer-mvp/node_modules/
+answer-mvp/.content-backup/
+answer-mvp/output/
+answer-mvp/model-config.json

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123f3a">
+    <title>大未来 · 数字人内容工作台</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23123f3a'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='34' fill='white'%3E未%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="返回内容工作台首页">
+        <span class="brand-mark" aria-hidden="true">未</span>
+        <span>
+          <strong>大未来</strong>
+          <small>数字人内容工作台</small>
+        </span>
+      </a>
+
+      <div class="header-actions">
+        <a class="button button-secondary" href="/avatar" target="_blank" rel="noopener">
+          打开数字人前台
+        </a>
+        <button class="button button-secondary" id="open-model-dialog" type="button">
+          模型设置
+        </button>
+        <button class="button button-quiet" id="open-key-dialog" type="button">
+          管理密钥
+        </button>
+        <button class="button button-primary" id="save-all" type="button" disabled>
+          保存全部更改
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">CONTENT WORKBENCH · MVP</p>
+          <h1 id="page-title">把业务内容交给大模型，生成自然、可播报的回答。</h1>
+          <p class="intro-copy">
+            在这里维护问法、关键词和已确认内容，再通过“模型设置”接入 OpenAI 兼容 API。保存后，模型会立即使用新内容组织答案。
+          </p>
+        </div>
+
+        <dl class="status-board" aria-label="服务状态">
+          <div>
+            <dt>服务状态</dt>
+            <dd><span class="status-dot" id="status-dot"></span><span id="service-status">连接中</span></dd>
+          </div>
+          <div>
+            <dt>内容数量</dt>
+            <dd id="content-count">—</dd>
+          </div>
+          <div>
+            <dt>保存状态</dt>
+            <dd id="save-status">等待载入</dd>
+          </div>
+          <div>
+            <dt>模型状态</dt>
+            <dd id="model-status">读取中</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="workspace" aria-label="内容配置工作区">
+        <aside class="panel library-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">内容目录</p>
+              <h2>问答条目</h2>
+            </div>
+            <button class="icon-button" id="add-item" type="button" aria-label="新增问答内容" title="新增问答内容">
+              <span aria-hidden="true">＋</span>
+            </button>
+          </div>
+
+          <label class="search-field" for="content-search">
+            <span class="visually-hidden">搜索问答内容</span>
+            <span aria-hidden="true">⌕</span>
+            <input id="content-search" type="search" placeholder="搜索问题、关键词或已确认内容">
+          </label>
+
+          <div class="item-list" id="item-list" role="listbox" aria-label="问答内容列表"></div>
+
+          <div class="library-footer">
+            <span id="visible-count">0 条内容</span>
+            <span>存储于 content.json</span>
+          </div>
+        </aside>
+
+        <section class="panel editor-panel" aria-labelledby="editor-title">
+          <div class="empty-state" id="empty-state">
+            <span class="empty-mark" aria-hidden="true">问</span>
+            <h2>选择一条内容开始编辑</h2>
+            <p>也可以点击左侧的“＋”新建标准问答。</p>
+          </div>
+
+          <form id="content-form" class="content-form" hidden novalidate>
+            <div class="panel-heading editor-heading">
+              <div>
+                <p class="section-kicker">内容编辑</p>
+                <h2 id="editor-title">问答配置</h2>
+              </div>
+              <span class="record-position" id="record-position"></span>
+            </div>
+
+            <div class="form-grid">
+              <label class="field field-wide">
+                <span class="field-label">内容 ID <b>必填</b></span>
+                <input id="field-id" name="id" maxlength="100" autocomplete="off" required>
+                <small>供系统识别，建议使用英文、数字和短横线。</small>
+              </label>
+
+              <label class="field field-wide">
+                <span class="field-label">用户可能提出的问法 <b>必填</b></span>
+                <textarea id="field-questions" name="questions" rows="5" maxlength="5000" placeholder="这个项目是什么？&#10;请介绍一下这个项目&#10;这个项目主要做什么？" required></textarea>
+                <small>每行填写一种问法；第一行作为列表中的标准问题。</small>
+              </label>
+
+              <label class="field field-wide">
+                <span class="field-label">匹配关键词 <b>必填</b></span>
+                <input id="field-keywords" name="keywords" maxlength="1000" placeholder="项目，大未来，介绍" required>
+                <small>使用中文或英文逗号分隔，也可换行。</small>
+              </label>
+
+              <label class="field field-wide">
+                <span class="field-label">已确认内容 <b>必填</b></span>
+                <textarea id="field-answer" name="answer" rows="8" maxlength="10000" placeholder="填写希望大模型参考的业务事实、规则或回答要点。" required></textarea>
+                <small><span id="answer-length">0</span> / 10000 字；不要填写 XXX、XX 或尚未确认的日期和地点。</small>
+              </label>
+            </div>
+
+            <div class="editor-actions">
+              <div>
+                <button class="button button-danger" id="delete-item" type="button">删除</button>
+              </div>
+              <div>
+                <button class="button button-quiet" id="move-up" type="button">上移</button>
+                <button class="button button-quiet" id="move-down" type="button">下移</button>
+                <button class="button button-secondary" id="duplicate-item" type="button">复制一条</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <aside class="panel tester-panel" aria-labelledby="tester-title">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">即时验证</p>
+              <h2 id="tester-title">问答试运行</h2>
+            </div>
+            <span class="live-badge">LIVE</span>
+          </div>
+
+          <p class="tester-copy">输入前台或数字人可能收到的问题，查看大模型结合当前内容生成的回答。</p>
+
+          <form id="tester-form" class="tester-form">
+            <label class="field">
+              <span class="field-label">测试问题</span>
+              <textarea id="test-question" rows="4" maxlength="500" placeholder="例如：前台怎么调用问答接口？" required></textarea>
+            </label>
+            <button class="button button-dark" id="test-submit" type="submit">测试回答</button>
+          </form>
+
+          <div class="quick-questions" id="quick-questions" aria-label="当前内容的快捷测试问题"></div>
+
+          <section class="answer-card answer-empty" id="answer-card" aria-live="polite">
+            <p class="answer-label">回答结果</p>
+            <p id="answer-text">提交一个问题后，答案会显示在这里。</p>
+            <p class="answer-meta" id="answer-meta" hidden></p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <dialog id="key-dialog" class="dialog">
+      <form method="dialog" id="key-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="section-kicker">访问设置</p>
+            <h2>管理密钥</h2>
+          </div>
+          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+        </div>
+        <p>服务器设置了 <code>ADMIN_API_KEY</code> 时，在这里输入相同密钥。密钥只保存在当前浏览器标签页。</p>
+        <label class="field">
+          <span class="field-label">管理密钥</span>
+          <input class="visually-hidden" type="text" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
+          <input id="admin-key" type="password" autocomplete="current-password" placeholder="未设置时留空">
+        </label>
+        <p class="dialog-message" id="key-message"></p>
+        <div class="dialog-actions">
+          <button class="button button-quiet" value="cancel" type="submit">取消</button>
+          <button class="button button-primary" id="apply-key" value="default" type="submit">连接内容服务</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="model-dialog" class="dialog dialog-wide">
+      <form id="model-form" novalidate>
+        <div class="dialog-heading">
+          <div>
+            <p class="section-kicker">LLM CONNECTION</p>
+            <h2>大语言模型设置</h2>
+          </div>
+          <button class="dialog-close" id="close-model-dialog" aria-label="关闭" type="button">×</button>
+        </div>
+        <p>支持 OpenAI 兼容的 <code>/chat/completions</code> 接口。API Key 只保存在服务器私有配置文件中，页面不会回显明文。</p>
+
+        <div class="model-form-grid">
+          <label class="field field-wide">
+            <span class="field-label">API 地址 <b>必填</b></span>
+            <input id="model-base-url" type="url" maxlength="2000" placeholder="例如：https://服务地址/v1" required>
+            <small>可填写到 <code>/v1</code>，也可直接填写完整的 <code>/chat/completions</code> 地址。</small>
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">API Key <em id="model-key-state">尚未保存</em></span>
+            <input class="visually-hidden" type="text" value="llm" autocomplete="username" tabindex="-1" aria-hidden="true">
+            <input id="model-api-key" type="password" maxlength="20000" autocomplete="new-password" placeholder="输入 API Key">
+            <small>已有 Key 时留空表示保持不变；读取配置时永远不会返回原 Key。</small>
+          </label>
+
+          <label class="field field-wide key-clear-row" id="model-clear-row" hidden>
+            <input id="model-clear-key" type="checkbox">
+            <span>清除服务器上已保存的 API Key</span>
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">模型名称 <b>必填</b></span>
+            <input id="model-name" maxlength="300" placeholder="填写服务商提供的模型 ID" required>
+          </label>
+
+          <label class="field">
+            <span class="field-label">回答范围</span>
+            <select id="model-answer-mode">
+              <option value="grounded">仅依据后台内容</option>
+              <option value="general">允许补充一般知识</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">随机度</span>
+            <input id="model-temperature" type="number" min="0" max="2" step="0.1" value="0.2">
+          </label>
+
+          <label class="field">
+            <span class="field-label">最大输出 Tokens</span>
+            <input id="model-max-tokens" type="number" min="64" max="32768" step="1" value="800">
+          </label>
+
+          <label class="field">
+            <span class="field-label">超时时间（秒）</span>
+            <input id="model-timeout" type="number" min="1" max="120" step="1" value="30">
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">系统提示词 <b>必填</b></span>
+            <textarea id="model-system-prompt" rows="5" maxlength="10000" required></textarea>
+            <small>控制角色、语气和事实边界；后台内容与用户问题不能覆盖这里的规则。</small>
+          </label>
+        </div>
+
+        <p class="dialog-message" id="model-message"></p>
+        <p class="cost-note">“保存并测试连接”会向模型服务发起一次很短的真实请求，可能产生少量费用。</p>
+        <div class="dialog-actions model-dialog-actions">
+          <button class="button button-quiet" id="cancel-model-settings" type="button">取消</button>
+          <button class="button button-secondary" id="save-model-settings" type="submit" data-action="save">保存设置</button>
+          <button class="button button-primary" id="test-model-settings" type="submit" data-action="test">保存并测试连接</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="delete-dialog" class="dialog dialog-small">
+      <form method="dialog" id="delete-form">
+        <p class="section-kicker">请确认</p>
+        <h2>删除这条问答？</h2>
+        <p id="delete-message">删除后，需要点击“保存全部更改”才会写入内容文件。</p>
+        <div class="dialog-actions">
+          <button class="button button-quiet" value="cancel" type="submit">取消</button>
+          <button class="button button-danger" id="confirm-delete" value="default" type="submit">确认删除</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

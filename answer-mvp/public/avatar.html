@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#071b2a">
+    <title>大未来 · 数字人问答</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2351dbc7'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='34' font-weight='700' fill='%23071928'%3E未%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/avatar.css">
+  </head>
+  <body>
+    <div class="page-glow page-glow-left" aria-hidden="true"></div>
+    <div class="page-glow page-glow-right" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="stage-brand" href="/avatar" aria-label="大未来数字人首页">
+        <span class="brand-symbol" aria-hidden="true">未</span>
+        <span class="brand-copy">
+          <strong>大未来</strong>
+          <small>DIGITAL HUMAN</small>
+        </span>
+      </a>
+
+      <div class="topbar-actions">
+        <span class="service-pill" id="service-pill">
+          <span class="service-dot" aria-hidden="true"></span>
+          <span id="service-label">正在连接内容服务</span>
+        </span>
+        <button class="quiet-action" id="sound-toggle" type="button" aria-pressed="true">
+          <span class="sound-icon" aria-hidden="true">♫</span>
+          <span id="sound-label">语音已开启</span>
+        </button>
+        <a class="quiet-action admin-link" href="/">内容工作台</a>
+      </div>
+    </header>
+
+    <main class="experience-shell">
+      <section class="avatar-zone" aria-labelledby="avatar-name">
+        <div class="state-readout" aria-live="polite">
+          <span class="state-indicator" aria-hidden="true">
+            <i></i><i></i><i></i>
+          </span>
+          <span>
+            <strong id="avatar-state-label">随时可以开始</strong>
+            <small id="avatar-state-hint">等待你的问题</small>
+          </span>
+        </div>
+
+        <div class="avatar-stage" id="avatar-stage" data-state="idle">
+          <div class="orbit orbit-one" aria-hidden="true"></div>
+          <div class="orbit orbit-two" aria-hidden="true"></div>
+          <div class="avatar-halo" aria-hidden="true"></div>
+
+          <video
+            class="avatar-video"
+            id="avatar-video-a"
+            muted
+            loop
+            playsinline
+            preload="auto"
+            aria-hidden="true"
+          ></video>
+          <video
+            class="avatar-video"
+            id="avatar-video-b"
+            muted
+            loop
+            playsinline
+            preload="auto"
+            aria-hidden="true"
+          ></video>
+
+          <div class="avatar-fallback" id="avatar-fallback" aria-hidden="true">
+            <svg viewBox="0 0 520 760" role="presentation">
+              <defs>
+                <linearGradient id="jacket-gradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#275e73"></stop>
+                  <stop offset="1" stop-color="#0a3047"></stop>
+                </linearGradient>
+                <linearGradient id="skirt-gradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#163e57"></stop>
+                  <stop offset="1" stop-color="#082438"></stop>
+                </linearGradient>
+                <filter id="soft-shadow" x="-30%" y="-30%" width="160%" height="180%">
+                  <feDropShadow dx="0" dy="16" stdDeviation="15" flood-color="#00131f" flood-opacity=".36"></feDropShadow>
+                </filter>
+              </defs>
+
+              <g class="thought-marks">
+                <circle cx="386" cy="156" r="9"></circle>
+                <circle cx="412" cy="125" r="13"></circle>
+                <circle cx="448" cy="84" r="19"></circle>
+              </g>
+
+              <g class="voice-marks">
+                <path d="M398 224c22 17 22 39 0 56"></path>
+                <path d="M422 204c39 29 39 67 0 96"></path>
+              </g>
+
+              <g class="avatar-figure" filter="url(#soft-shadow)">
+                <ellipse class="back-hair" cx="262" cy="196" rx="102" ry="128"></ellipse>
+                <path class="leg" d="M214 565 198 699c-2 19 9 31 26 31h8l26-165Z"></path>
+                <path class="leg" d="M302 565 326 730h9c17 0 28-12 25-31l-16-134Z"></path>
+                <path class="shoe" d="M195 710c-12 7-24 17-27 28-2 8 5 13 15 13h55l-3-35Z"></path>
+                <path class="shoe" d="M325 716 322 751h55c10 0 17-5 15-13-3-11-15-21-27-28Z"></path>
+                <path class="skirt" d="M188 434h146l34 163H162Z" fill="url(#skirt-gradient)"></path>
+
+                <g class="arm arm-left">
+                  <path class="sleeve" d="M194 366c-28 5-48 31-61 78l-28 107 38 12 46-99 35-67Z"></path>
+                  <circle class="skin" cx="121" cy="558" r="19"></circle>
+                </g>
+                <g class="arm arm-right">
+                  <path class="sleeve" d="M326 366c28 5 48 31 61 78l28 107-38 12-46-99-35-67Z"></path>
+                  <circle class="skin" cx="399" cy="558" r="19"></circle>
+                </g>
+
+                <path class="torso" d="M194 347c29-21 103-21 132 0 24 25 29 77 19 136H175c-10-59-5-111 19-136Z" fill="url(#jacket-gradient)"></path>
+                <path class="shirt" d="m225 339 35 66 35-66c-18-8-52-8-70 0Z"></path>
+                <path class="lapel" d="m208 349 35 85 17-29-35-66Z"></path>
+                <path class="lapel" d="m312 349-35 85-17-29 35-66Z"></path>
+                <path class="neck" d="M235 300h50v49c-13 17-37 17-50 0Z"></path>
+                <ellipse class="skin face" cx="260" cy="214" rx="76" ry="92"></ellipse>
+                <path class="front-hair" d="M187 207c-4-70 27-120 77-120 58 0 90 43 78 116-20-21-30-47-35-69-28 25-68 40-120 45Z"></path>
+                <path class="fringe" d="M205 158c27 3 63-15 91-42-4 29-24 51-59 65Z"></path>
+                <ellipse class="eye" cx="229" cy="220" rx="6" ry="9"></ellipse>
+                <ellipse class="eye" cx="292" cy="220" rx="6" ry="9"></ellipse>
+                <path class="brow" d="M215 199c10-7 21-8 31-2"></path>
+                <path class="brow" d="M276 197c10-6 22-5 31 2"></path>
+                <path class="nose" d="M260 224v20"></path>
+                <path class="mouth mouth-smile" d="M239 266c15 13 29 13 43 0"></path>
+                <ellipse class="mouth mouth-talk" cx="260" cy="270" rx="14" ry="8"></ellipse>
+                <circle class="badge" cx="312" cy="393" r="13"></circle>
+                <path class="badge-mark" d="m306 393 5 5 9-12"></path>
+              </g>
+
+              <ellipse class="stage-shadow" cx="260" cy="738" rx="142" ry="18"></ellipse>
+            </svg>
+          </div>
+
+          <div class="media-note" id="media-note" hidden>
+            <span aria-hidden="true">◇</span>
+            <span>当前显示演示动画；同名透明视频可直接替换</span>
+          </div>
+        </div>
+
+        <div class="character-caption">
+          <span class="caption-line" aria-hidden="true"></span>
+          <span>
+            <small>数字助手</small>
+            <strong id="avatar-name">小未</strong>
+          </span>
+        </div>
+      </section>
+
+      <section class="conversation-panel" aria-labelledby="conversation-title">
+        <div class="conversation-heading">
+          <div>
+            <p class="eyebrow">SMART CAMPUS GUIDE</p>
+            <h1 id="conversation-title">有什么想了解的？</h1>
+            <p>我会结合后台内容，由大语言模型生成并播报答案。</p>
+          </div>
+          <button class="present-button" id="presentation-button" type="button">
+            <span aria-hidden="true">▷</span>
+            主持开场
+          </button>
+        </div>
+
+        <div class="conversation-log" id="conversation-log" aria-live="polite" aria-relevant="additions">
+          <article class="message message-assistant">
+            <span class="message-avatar" aria-hidden="true">未</span>
+            <div>
+              <p class="message-name">小未</p>
+              <p id="welcome-message">你好，我是大未来数字助手。请问有什么可以帮你？</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="quick-question-list" id="quick-question-list" aria-label="快捷问题"></div>
+
+        <form class="question-composer" id="question-form">
+          <label for="question-input" class="visually-hidden">输入问题</label>
+          <textarea
+            id="question-input"
+            rows="1"
+            maxlength="500"
+            placeholder="输入你想问的问题…"
+            required
+          ></textarea>
+          <button class="send-button" id="send-button" type="submit" aria-label="发送问题">
+            <span aria-hidden="true">↗</span>
+          </button>
+        </form>
+        <p class="composer-hint">按 Enter 发送，Shift + Enter 换行 · 回答由后台配置的大语言模型生成</p>
+
+        <section class="preview-panel" id="preview-panel" hidden aria-label="姿态预览">
+          <span>姿态预览</span>
+          <div>
+            <button type="button" data-preview-state="idle">默认</button>
+            <button type="button" data-preview-state="thinking">思考</button>
+            <button type="button" data-preview-state="speaking">对话</button>
+            <button type="button" data-preview-state="presenting">主持</button>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <noscript>
+      <p class="noscript-note">请启用 JavaScript 以使用数字人问答。</p>
+    </noscript>
+
+    <script type="module" src="/avatar.js"></script>
+  </body>
+</html>

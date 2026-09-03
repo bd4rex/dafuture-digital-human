@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "mediaMode": "demo",
+  "characterName": "小未",
+  "welcomeText": "你好，我是大未来数字助手小未。我会结合后台内容，通过大语言模型为你生成回答。",
+  "presentationText": "大家好，欢迎来到大未来数字人问答体验。我会结合后台配置的内容，通过大语言模型生成自然、可播报的回答。",
+  "quickQuestions": [
+    "这个数字人问答原型能做什么？",
+    "前台怎么调用问答接口？",
+    "系统如何生成答案？"
+  ],
+  "states": {
+    "idle": {
+      "label": "随时可以开始",
+      "hint": "等待你的问题",
+      "sources": [
+        {
+          "src": "/avatar-media/idle.mov",
+          "type": "video/quicktime; codecs=hvc1",
+          "platform": "apple"
+        },
+        {
+          "src": "/avatar-media/idle.webm",
+          "type": "video/webm; codecs=vp9",
+          "platform": "web"
+        }
+      ]
+    },
+    "thinking": {
+      "label": "正在思考",
+      "hint": "正在调用大语言模型",
+      "sources": [
+        {
+          "src": "/avatar-media/thinking.mov",
+          "type": "video/quicktime; codecs=hvc1",
+          "platform": "apple"
+        },
+        {
+          "src": "/avatar-media/thinking.webm",
+          "type": "video/webm; codecs=vp9",
+          "platform": "web"
+        }
+      ]
+    },
+    "speaking": {
+      "label": "正在回答",
+      "hint": "答案播报中",
+      "sources": [
+        {
+          "src": "/avatar-media/speaking.mov",
+          "type": "video/quicktime; codecs=hvc1",
+          "platform": "apple"
+        },
+        {
+          "src": "/avatar-media/speaking.webm",
+          "type": "video/webm; codecs=vp9",
+          "platform": "web"
+        }
+      ]
+    },
+    "presenting": {
+      "label": "主持模式",
+      "hint": "正在进行开场介绍",
+      "sources": [
+        {
+          "src": "/avatar-media/presenting.mov",
+          "type": "video/quicktime; codecs=hvc1",
+          "platform": "apple"
+        },
+        {
+          "src": "/avatar-media/presenting.webm",
+          "type": "video/webm; codecs=vp9",
+          "platform": "web"
+        }
+      ]
+    }
+  }
+}
