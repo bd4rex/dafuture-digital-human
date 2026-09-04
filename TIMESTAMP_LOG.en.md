@@ -87,3 +87,8 @@
 - Administration security: unauthenticated requests receive only the sign-in page, and manual-content, knowledge, and model endpoints all validate authorization server-side. First-time password setup is loopback-only and persists only a salted scrypt hash. Sign-in uses an eight-hour HttpOnly, SameSite=Strict session invalidated by restart or logout; optional `ADMIN_API_KEY` Bearer access remains available for automation.
 - Verification: all 32 `npm test` cases passed, including DOCX/PDF extraction, knowledge restart recovery, and sign-in/logout contracts; `npm audit --omit=dev` reported zero vulnerabilities. An isolated browser completed unauthenticated entry, password sign-in, Markdown selection/import/preview, service restart, and reauthentication with the imported document still available. Desktop and 390 px layouts had no horizontal overflow, and the console reported zero errors and warnings.
 - Limitation: the local Docker daemon was unavailable, so the image was not rebuilt in this iteration. Browser acceptance used a temporary data directory and dedicated test password; production `content.json`, production knowledge, and real API keys were not changed.
+
+## 2026-09-04 19:47 +0800
+
+- Task: simplify first-time administration-password setup for the demo by removing the server-loopback restriction and the requirement to preset `ADMIN_PASSWORD` for remote deployments.
+- Implementation: local, LAN, and Docker visitors now share the same flow: if no administration password exists, the first visit to the administration page can create one directly. After setup, server-side sessions still protect content, knowledge, and model settings. `ADMIN_PASSWORD` remains available only as an optional preset.

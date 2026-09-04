@@ -22,13 +22,13 @@ By default, the service listens only on `http://127.0.0.1:8080`:
 - `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
 - `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
 
-The first local visit to the administration page asks you to create an administration password of at least eight characters.
+The first visit to the administration page asks you to create an administration password of at least eight characters.
 
 ## Administrator Sign-In
 
 - Before sign-in, `/` serves only the password page. Manual content, knowledge-library, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
-- First-time password setup is allowed only from the server's loopback address. Set `ADMIN_PASSWORD` before starting a remote or Docker deployment.
-- A locally created password is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
+- Without a preset password, the first visitor to the administration page can create it directly; local, LAN, and Docker access use the same flow.
+- A password created through the page is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
 - Successful sign-in creates an HttpOnly, SameSite=Strict cookie. The session expires after eight hours by default and is invalidated by logout or service restart.
 - `ADMIN_API_KEY` remains available as an optional Bearer credential for automation. When `ADMIN_PASSWORD` is absent, it also acts as the web sign-in password.
 
@@ -194,13 +194,13 @@ The model endpoints, `GET/PUT /api/content`, and the knowledge endpoints use the
 
 ## Administration Access Protection
 
-To use the workbench from another computer on a campus network or from a server, set both a listening address and a strong administration password:
+To use the workbench from another computer on a campus network or from a server, expose the listening address:
 
 ```bash
-HOST=0.0.0.0 ADMIN_PASSWORD='replace-with-a-strong-administration-password' npm start
+HOST=0.0.0.0 npm start
 ```
 
-Open the page and sign in with that password. It is separate from the model provider's API key. Configure `ADMIN_API_KEY` separately only when an automated client needs Bearer access.
+Open the administration page once to create the password, then use it to sign in. `ADMIN_PASSWORD` remains an optional preset, not a requirement for remote access. It is separate from the model provider's API key. Configure `ADMIN_API_KEY` separately only when an automated client needs Bearer access.
 
 Before exposing the service publicly, an existing gateway should also provide HTTPS, rate limiting, and an appropriate access-log policy.
 
@@ -228,12 +228,11 @@ The current 32 tests cover first-time password setup, sign-in/logout, salted has
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
 docker run --rm -p 8080:8080 \
-  -e ADMIN_PASSWORD='replace-with-a-strong-administration-password' \
   -v dafuture-answer-data:/data \
   dafuture-answer-mvp
 ```
 
-The named volume persists manual content, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
+Open the administration page after startup to create the password. The named volume persists manual content, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
 
 ## Environment Variables
 
@@ -245,8 +244,8 @@ The named volume persists manual content, model configuration, the administratio
 | `MODEL_CONFIG_FILE` | `model-config.json` beside the content file | Private model configuration; Docker uses `/data/model-config.json` |
 | `KNOWLEDGE_FILE` | `knowledge.json` beside the content file | Extracted text and chunk index |
 | `KNOWLEDGE_FILES_DIR` | `knowledge-files` beside the index | Preserved imported originals |
-| `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time local setup |
-| `ADMIN_PASSWORD` | Not set | Preset web-administration password; recommended for remote deployments |
+| `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time setup |
+| `ADMIN_PASSWORD` | Not set | Optional preset web-administration password; otherwise the first visitor creates it in the page |
 | `ADMIN_SESSION_TTL_MS` | `28800000` | Session lifetime, from 15 minutes through seven days |
 | `ADMIN_COOKIE_SECURE` | Automatic | Set `true` behind an HTTPS gateway when the service cannot detect the original protocol |
 | `CONTENT_POLL_INTERVAL_MS` | `2000` | Content polling interval, from 20 to 60,000 milliseconds |

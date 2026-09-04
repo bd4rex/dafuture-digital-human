@@ -76,6 +76,6 @@ The current suite contains 32 automated tests covering administration passwords 
 ## Security Boundary for the Public Repository
 
 - Do not commit `answer-mvp/model-config.json`, `admin-auth.json`, `knowledge.json`, `knowledge-files/`, `.env` files, private keys, or real API keys.
-- Before exposing administration remotely, set a strong `ADMIN_PASSWORD` and place the service behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
+- Create the administration password on the first visit. If the service is later exposed publicly, place it behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
 - The included avatar videos are technical demo assets and do not represent the final real-person avatar.
 - Public visibility only makes the repository contents viewable. No open-source license is currently included, so no permission to copy, modify, or distribute is granted automatically.

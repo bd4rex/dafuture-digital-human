@@ -148,7 +148,7 @@ export class AdminAuthStore {
       serialized = await readFile(this.configPath, 'utf8');
     } catch (error) {
       if (error.code === 'ENOENT') {
-        this.logger.warn('尚未设置管理密码；仅允许从本机完成首次设置');
+        this.logger.warn('尚未设置管理密码；等待首次访问管理页面时设置');
         return;
       }
       throw new Error(`无法读取管理密码文件：${error.message}`, { cause: error });

@@ -438,7 +438,7 @@ test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {
   }
 });
 
-test('首次管理密码只能本机设置，落盘仅保存加盐哈希', async (t) => {
+test('首次管理密码可从远程管理页设置，落盘仅保存加盐哈希', async (t) => {
   const { app, adminAuthPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     adminPassword: '',
   });
@@ -446,7 +446,7 @@ test('首次管理密码只能本机设置，落盘仅保存加盐哈希', async
     await app.inject({ method: 'GET', url: '/api/admin/status' })
   ).json();
   assert.equal(status.setupRequired, true);
-  assert.equal(status.setupAllowed, true);
+  assert.equal(status.setupAllowed, undefined);
   assert.equal(status.authenticated, false);
 
   const protectedResponse = await app.inject({
@@ -456,18 +456,23 @@ test('首次管理密码只能本机设置，落盘仅保存加盐哈希', async
   assert.equal(protectedResponse.statusCode, 401);
   assert.equal(protectedResponse.json().error, 'ADMIN_SETUP_REQUIRED');
 
-  const remoteSetup = await app.inject({
+  const crossOriginSetup = await app.inject({
     method: 'POST',
     url: '/api/admin/setup',
     remoteAddress: '192.0.2.10',
+    headers: {
+      host: 'demo.example.test',
+      origin: 'https://other.example.test',
+    },
     payload: { password: 'safe-admin-password' },
   });
-  assert.equal(remoteSetup.statusCode, 403);
-  assert.equal(remoteSetup.json().error, 'ADMIN_SETUP_LOCAL_ONLY');
+  assert.equal(crossOriginSetup.statusCode, 403);
+  assert.equal(crossOriginSetup.json().error, 'ADMIN_ORIGIN_REJECTED');
 
   const shortPassword = await app.inject({
     method: 'POST',
     url: '/api/admin/setup',
+    remoteAddress: '192.0.2.10',
     payload: { password: 'short' },
   });
   assert.equal(shortPassword.statusCode, 400);
@@ -476,6 +481,7 @@ test('首次管理密码只能本机设置，落盘仅保存加盐哈希', async
   const setup = await app.inject({
     method: 'POST',
     url: '/api/admin/setup',
+    remoteAddress: '192.0.2.10',
     payload: { password: 'safe-admin-password' },
   });
   assert.equal(setup.statusCode, 200);

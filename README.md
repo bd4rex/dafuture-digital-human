@@ -76,6 +76,6 @@ npm audit --omit=dev
 ## 公开仓库安全边界
 
 - 请勿提交 `answer-mvp/model-config.json`、`admin-auth.json`、`knowledge.json`、`knowledge-files/`、`.env`、私钥或真实 API Key。
-- 远程开放后台前必须设置强 `ADMIN_PASSWORD`，并由反向代理提供 HTTPS、限流和适当的日志策略。
+- 首次访问管理页时设置管理密码；如需对公网开放，再由反向代理提供 HTTPS、限流和适当的日志策略。
 - 仓库中的数字人视频是技术联调用演示素材，不代表最终真人形象。
 - Public 仅表示仓库内容公开可见；当前未附开源许可证，不自动授予复制、修改或分发许可。

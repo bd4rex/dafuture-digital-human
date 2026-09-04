@@ -40,7 +40,7 @@ function setSetupMode(required) {
   elements.title.textContent = required ? '首次设置管理密码' : '进入管理后台';
   elements.passwordLabel.textContent = required ? '新管理密码' : '管理密码';
   elements.copy.textContent = required
-    ? '本机尚未设置管理密码。设置后密码只以加盐哈希形式保存，无法在页面中查看明文。'
+    ? '尚未设置管理密码。设置后密码只以加盐哈希形式保存，无法在页面中查看明文。'
     : '请输入管理密码。登录会话在服务重启或过期后失效。';
   elements.submit.textContent = required ? '设置密码并进入' : '登录';
 }
@@ -53,11 +53,6 @@ async function loadStatus() {
       return;
     }
     setSetupMode(status.setupRequired);
-    if (status.setupRequired && !status.setupAllowed) {
-      elements.message.textContent =
-        '首次设置只允许在服务器本机完成。远程部署请设置 ADMIN_PASSWORD 环境变量后重启服务。';
-      elements.submit.disabled = true;
-    }
   } catch (error) {
     elements.message.textContent = error.message;
     elements.submit.disabled = true;

@@ -25,7 +25,7 @@ npm start
 ## 管理员登录
 
 - 未登录时，管理地址只显示密码页；手工内容、知识库和模型配置接口同时由服务端拦截。
-- 没有预设密码时，只能从服务器本机完成首次设置；远程或 Docker 部署应设置 `ADMIN_PASSWORD`。
+- 没有预设密码时，首次访问管理页即可直接设置密码，本机、局域网或 Docker 访问方式一致。
 - 密码只以 scrypt 加盐哈希保存到 `admin-auth.json`，文件权限为 `0600`，不保存明文。
 - 登录后使用 HttpOnly、SameSite=Strict 会话 Cookie，默认 8 小时过期；服务重启或点击“退出登录”后会话失效。
 - `ADMIN_API_KEY` 仍可作为 Bearer 密钥供自动化客户端调用；未单独设置 `ADMIN_PASSWORD` 时，它也是 Web 登录密码。
@@ -192,13 +192,13 @@ http://127.0.0.1:8080/avatar?preview=1
 
 ## 后台访问保护
 
-需要从校园网其他电脑或服务器访问时，应同时设置监听地址和足够长的管理密码：
+需要从校园网其他电脑或服务器访问时，只需开放监听地址：
 
 ```bash
-HOST=0.0.0.0 ADMIN_PASSWORD='请替换为强管理密码' npm start
+HOST=0.0.0.0 npm start
 ```
 
-打开页面后使用该密码登录。管理密码与模型服务的 API Key 是两个独立凭据。如需给自动化程序另行授权，再单独设置 `ADMIN_API_KEY`。
+第一次打开管理页时直接设置密码，之后使用该密码登录。`ADMIN_PASSWORD` 仅作为可选的预设方式，不是远程访问的前置条件。管理密码与模型服务的 API Key 是两个独立凭据；如需给自动化程序另行授权，再单独设置 `ADMIN_API_KEY`。
 
 正式对公网开放时，还应由现有网关提供 HTTPS、限流和适当的访问日志策略。
 
@@ -235,12 +235,11 @@ npm run test:capacity
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
 docker run --rm -p 8080:8080 \
-  -e ADMIN_PASSWORD='请替换为强管理密码' \
   -v dafuture-answer-data:/data \
   dafuture-answer-mvp
 ```
 
-命名卷同时持久化手工内容、模型配置、管理密码哈希、知识索引和原文件。不要把含真实 Key 的卷导出到公开位置。
+启动后打开管理页设置密码。命名卷同时持久化手工内容、模型配置、管理密码哈希、知识索引和原文件。不要把含真实 Key 的卷导出到公开位置。
 
 ## 环境变量
 
@@ -253,7 +252,7 @@ docker run --rm -p 8080:8080 \
 | `KNOWLEDGE_FILE` | 与内容文件同目录的 `knowledge.json` | 已提取文字与分片索引 |
 | `KNOWLEDGE_FILES_DIR` | 知识索引同目录的 `knowledge-files` | 已导入原文件目录 |
 | `ADMIN_AUTH_FILE` | 与内容文件同目录的 `admin-auth.json` | 首次设置的管理密码加盐哈希 |
-| `ADMIN_PASSWORD` | 未设置 | Web 管理页预设密码；远程部署建议必填 |
+| `ADMIN_PASSWORD` | 未设置 | 可选的 Web 管理页预设密码；不设置时由首次访问者在页面中创建 |
 | `ADMIN_SESSION_TTL_MS` | `28800000` | 管理会话有效期，可设 15 分钟至 7 天 |
 | `ADMIN_COOKIE_SECURE` | 自动 | HTTPS 网关后若服务无法识别原始协议，可显式设为 `true` |
 | `CONTENT_POLL_INTERVAL_MS` | `2000` | 内容文件检查间隔，20—60000 毫秒 |

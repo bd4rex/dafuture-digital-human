@@ -1049,15 +1049,6 @@ function bearerTokenMatches(header, expectedKey) {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
-function isLoopbackAddress(address) {
-  return (
-    address === '::1' ||
-    address === '127.0.0.1' ||
-    address === '::ffff:127.0.0.1' ||
-    address?.startsWith('127.')
-  );
-}
-
 function isSameOriginRequest(request) {
   const origin = request.headers.origin;
   if (!origin) {
@@ -1441,7 +1432,7 @@ export async function buildApp(options = {}) {
         ? 'ADMIN_SETUP_REQUIRED'
         : 'ADMIN_AUTH_REQUIRED',
       message: adminAuthStore.setupRequired()
-        ? '请先从服务器本机设置管理密码。'
+        ? '请先设置管理密码。'
         : '管理会话已失效，请重新登录。',
     });
   };
@@ -1612,19 +1603,14 @@ export async function buildApp(options = {}) {
         authenticated:
           adminAuthStore.hasValidSession(request) || hasBearerAccess(request),
         setupRequired: adminAuthStore.setupRequired(),
-        setupAllowed:
-          adminAuthStore.setupRequired() &&
-          isLoopbackAddress(request.ip) &&
-          isSameOriginRequest(request),
       }),
   );
 
   app.post('/api/admin/setup', async (request, reply) => {
-    if (!isLoopbackAddress(request.ip) || !isSameOriginRequest(request)) {
+    if (!isSameOriginRequest(request)) {
       return reply.code(403).send({
-        error: 'ADMIN_SETUP_LOCAL_ONLY',
-        message:
-          '首次密码只能在服务器本机设置；远程部署请通过 ADMIN_PASSWORD 环境变量预设。',
+        error: 'ADMIN_ORIGIN_REJECTED',
+        message: '首次设置只允许从当前管理页面发起。',
       });
     }
     if (
