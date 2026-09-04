@@ -1,8 +1,8 @@
 {
   "name": "dafuture-digital-human-answer-mvp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "“大未来”大语言模型驱动的数字人问答与四态视频前端 MVP",
+  "description": "“大未来”对话与确定性主持双模式数字人 MVP",
   "type": "module",
   "scripts": {
     "start": "node server.js",

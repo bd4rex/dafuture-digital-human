@@ -6,8 +6,9 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 
 ## Current Status
 
-- Application version: `0.3.0`.
-- A password-protected content workbench, persistent imported-file knowledge library, model configuration, Q&A API, four-state transparent-video frontend, browser Mandarin voice input, and male speech playback are implemented.
+- Application version: `0.4.0`.
+- The password-protected workbench now controls two live modes: Dialogue uses the configured LLM and persistent knowledge, while Hosting broadcasts a selected prepared script verbatim from the administration page.
+- Hosting scripts persist on the server. Mode, present, and stop commands synchronize to every open avatar frontend through SSE; a new command interrupts the previous script, while a service restart does not replay it.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
 - No real model configuration is included. Users must enter their own settings in the workbench after the first launch.
 - This is an MVP prototype and has not been deployed to a production server. Production male-avatar media is integrated, and browser playback now prefers Mandarin male voices; cross-device production-grade TTS still needs to be integrated.
@@ -24,7 +25,7 @@ npm start
 
 By default, the service listens only on the local machine:
 
-- `http://127.0.0.1:8080/`: content and model configuration workbench.
+- `http://127.0.0.1:8080/`: dual-mode control, content, knowledge, and model workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: service diagnostics and dependency state.
 - `http://127.0.0.1:8080/ready`: Q&A readiness check.
@@ -37,6 +38,7 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 - Import TXT, Markdown, CSV, JSON, DOCX, and PDF files through the web UI, preserving originals and a persistent chunk index.
 - Configure an OpenAI-compatible API URL, API key, model name, prompt, and answer scope in the web workbench.
 - Send a user question and managed content to the model through `POST /answer`.
+- Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
 - Protect administration with server-verified passwords, HttpOnly sessions, and same-origin checks, while retaining optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
@@ -71,11 +73,11 @@ npm test
 npm audit --omit=dev
 ```
 
-The current suite contains 32 automated tests covering administration passwords and sessions, imported-file persistence and restart recovery, DOCX/PDF extraction, candidate rollback, response semantics, model-configuration security, content hot reload, error sanitization, the avatar state machine, and video range requests.
+The current suite contains 34 automated tests covering administration passwords and sessions, persistent hosting scripts, live mode switching, exact SSE commands, hosting/Q&A exclusion, imported-file persistence and restart recovery, DOCX/PDF extraction, candidate rollback, response semantics, model-configuration security, content hot reload, error sanitization, the avatar state machine, and video range requests.
 
 ## Security Boundary for the Public Repository
 
-- Do not commit `answer-mvp/model-config.json`, `admin-auth.json`, `knowledge.json`, `knowledge-files/`, `.env` files, private keys, or real API keys.
+- Do not commit `answer-mvp/model-config.json`, `admin-auth.json`, `host-scripts.json`, `knowledge.json`, `knowledge-files/`, `.env` files, private keys, or real API keys.
 - Create the administration password on the first visit. If the service is later exposed publicly, place it behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
 - The included avatar videos are technical demo assets and do not represent the final real-person avatar.
 - Public visibility only makes the repository contents viewable. No open-source license is currently included, so no permission to copy, modify, or distribute is granted automatically.

@@ -2,7 +2,7 @@
 
 # “Da Future” LLM Digital Human Q&A MVP
 
-This is a runnable local prototype. A visitor asks a question through the digital-human frontend, the service retrieves relevant manual Q&A entries and imported knowledge files for a configured large language model, and the generated text is displayed and spoken by the browser.
+This is a runnable dual-mode prototype. Dialogue mode sends visitor questions, manual Q&A, and imported knowledge to a configured large language model. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
 
 The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, and system prompt can all be configured in the web workbench.
 
@@ -17,7 +17,7 @@ npm start
 
 By default, the service listens only on `http://127.0.0.1:8080`:
 
-- `http://127.0.0.1:8080/`: content and model configuration workbench.
+- `http://127.0.0.1:8080/`: live mode control, content, knowledge, and model workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
 - `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
@@ -64,6 +64,15 @@ In both modes, manual Q&A and imported knowledge files are model context rather 
 
 ## Web Workbench
 
+The tabs at the top of the workbench also switch the live runtime mode:
+
+- **Dialogue mode** enables typed or spoken visitor questions backed by the configured LLM and managed knowledge.
+- **Hosting mode** immediately pauses visitor Q&A. Administrators can maintain multiple scripts and select “Save and Broadcast” to send one exact script without LLM rewriting.
+- Same-origin SSE broadcasts mode, presentation, and stop commands to every open frontend. A new script interrupts the previous one. Stop keeps the frontend in hosting standby; returning to dialogue mode restores Q&A.
+- Scripts persist in `host-scripts.json` with revision conflict protection. On restart, scripts remain, but runtime mode resets to dialogue and no old command is replayed.
+
+This MVP controls every frontend connected to one service instance as a single group; venue or device targeting is not yet included.
+
 The content area supports:
 
 - Creating, editing, copying, sorting, deleting, and searching knowledge entries.
@@ -97,11 +106,11 @@ At answer time, the service selects up to 12 relevant imported chunks within the
 The frontend uses four pre-generated transparent videos for four states:
 
 ```text
-Page opened -> idle
-Question submitted -> thinking
-Model answer ready -> speaking
-Speech finished -> idle
-“Host Introduction” selected -> presenting -> speech finished -> idle
+Dialogue: question -> thinking -> model answer -> speaking -> idle
+Administrator enables hosting -> frontend Q&A locks and waits
+Administrator selects a script -> presenting -> exact playback -> hosting standby
+Another script -> immediately interrupts the previous playback
+Stop -> hosting standby; return to dialogue -> Q&A restored
 ```
 
 Speech currently uses the browser's local speech synthesis and prefers Mandarin male voices. macOS/Chrome selects `Reed` first, followed by `Eddy`, `Rocko`, and common Windows male voices such as Yunxi, Yunjian, Yunyang, and Kangkang. Rate and pitch are configured in the `speech` section of `public/avatar-config.json`. If none of these voices is installed, the browser falls back to an available local Chinese voice; use server-side TTS in production when every device must use the same voice. If video is unavailable or the user has enabled reduced motion, the page falls back to lightweight animation while Q&A remains available.
@@ -124,7 +133,7 @@ Preview all four states manually:
 http://127.0.0.1:8080/avatar?preview=1
 ```
 
-See `public/avatar-media/README.en.md` for video replacement instructions. Configure the digital-human name, welcome text, host script, and media paths in `public/avatar-config.json`. Visitor quick questions come from the first phrasing of the first three `content.json` entries; the visitor page refreshes them by content revision after workbench edits or reordering.
+See `public/avatar-media/README.en.md` for video replacement instructions. Configure the digital-human name, welcome text, and media paths in `public/avatar-config.json`; manage hosting scripts in the web workbench. Visitor quick questions come from the first phrasing of the first three `content.json` entries and refresh by content revision.
 
 ## API Contract
 
@@ -137,6 +146,8 @@ Request:
   "question": "How should the frontend call the Q&A API?"
 }
 ```
+
+While hosting mode is active, `POST /answer` returns HTTP `409` with `HOSTING_MODE_ACTIVE`; the frontend also disables text, quick-question, and microphone controls.
 
 When the model is configured and the request succeeds:
 
@@ -177,7 +188,7 @@ Questions are limited to 500 characters. Use `CORS_ORIGIN` to restrict the permi
 - `PUT /api/model-config`: saves settings; a blank key preserves the existing key. Changed complete connection fields are validated before activation; clients may also send `testConnection: true` explicitly.
 - `POST /api/model-config/test`: sends a connection test using the saved settings.
 
-The model endpoints, `GET/PUT /api/content`, and the knowledge endpoints use the same administrator-session protection.
+The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-control endpoints use the same administrator-session protection.
 
 ### Knowledge Library Endpoints
 
@@ -186,10 +197,19 @@ The model endpoints, `GET/PUT /api/content`, and the knowledge endpoints use the
 - `GET /api/knowledge/:id/download`: download the preserved original.
 - `DELETE /api/knowledge/:id`: delete the original and all extracted chunks.
 
+### Hosting Control Endpoints
+
+- `GET /api/live/state`: public current `dialogue` / `hosting` mode, without script text.
+- `GET /api/live/events`: SSE stream of `sync`, `mode`, `present`, and `stop`; each `present` event carries the exact selected script.
+- `GET/PUT /api/live-control`: authenticated script snapshot and complete-list persistence.
+- `POST /api/live-control/mode`: authenticated runtime mode switch.
+- `POST /api/live-control/present`: authenticated broadcast by `scriptId`.
+- `POST /api/live-control/stop`: authenticated stop command for all connected frontends.
+
 ### Health and Readiness Endpoints
 
 - `GET /health` always returns HTTP 200 and reports `ready`, the active content revision, and model state as `unconfigured`, `unverified`, `available`, or `unavailable`.
-- `GET /ready` returns the same payload. It returns HTTP 200 only when content can be served and the model is fully configured without a known connection failure; otherwise it returns HTTP 503. Docker uses this endpoint for its health check.
+- `GET /ready` returns the same payload. Dialogue mode requires serviceable content and a configured model without a known connection failure. Hosting mode does not depend on the model, so serviceable content and live control are sufficient for HTTP 200. Docker uses this endpoint for its health check.
 - If a damaged content file leaves a previous valid version available, the service remains `ready: true` with overall state `degraded`. A known model-call failure changes it to `ready: false` and `not_ready`.
 
 ## Administration Access Protection
@@ -220,7 +240,7 @@ Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, 
 npm test
 ```
 
-The current 32 tests cover first-time password setup, sign-in/logout, salted hashes and same-origin enforcement, knowledge import/deduplication/replacement/deletion, restart recovery, DOCX/PDF extraction and retrieval, failed candidate-model rollback, key non-disclosure, upstream-error sanitization, content hot reload, the digital-human state machine, and video range requests.
+The current 34 tests cover first-time password setup, sign-in/logout, salted hashes and same-origin enforcement, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
 
 ## Docker
 
@@ -232,7 +252,7 @@ docker run --rm -p 8080:8080 \
   dafuture-answer-mvp
 ```
 
-Open the administration page after startup to create the password. The named volume persists manual content, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
+Open the administration page after startup to create the password. The named volume persists manual content, hosting scripts, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
 
 ## Environment Variables
 
@@ -245,6 +265,7 @@ Open the administration page after startup to create the password. The named vol
 | `KNOWLEDGE_FILE` | `knowledge.json` beside the content file | Extracted text and chunk index |
 | `KNOWLEDGE_FILES_DIR` | `knowledge-files` beside the index | Preserved imported originals |
 | `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time setup |
+| `LIVE_CONTROL_FILE` | `host-scripts.json` beside the content file | Persistent scripts; runtime mode and commands are not persisted |
 | `ADMIN_PASSWORD` | Not set | Optional preset web-administration password; otherwise the first visitor creates it in the page |
 | `ADMIN_SESSION_TTL_MS` | `28800000` | Session lifetime, from 15 minutes through seven days |
 | `ADMIN_COOKIE_SECURE` | Automatic | Set `true` behind an HTTPS gateway when the service cannot detect the original protocol |

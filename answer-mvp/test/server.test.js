@@ -6,10 +6,12 @@ import test from 'node:test';
 
 import {
   buildApp,
+  HOSTING_MODE_TEXT,
   MODEL_NOT_CONFIGURED_TEXT,
   NO_ANSWER_TEXT,
 } from '../server.js';
 import { KnowledgeStore, parseKnowledgeFile } from '../knowledge-store.js';
+import { LiveControlStore } from '../live-control-store.js';
 
 const ORIGINAL_CONTENT = [
   {
@@ -79,6 +81,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
   );
   const contentPath = path.join(temporaryDirectory, 'content.json');
   const modelConfigPath = path.join(temporaryDirectory, 'model-config.json');
+  const liveControlPath = path.join(temporaryDirectory, 'host-scripts.json');
   await writeFile(contentPath, JSON.stringify(content), 'utf8');
   const defaultMock = createMockLlm();
 
@@ -89,6 +92,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
     contentPath,
     modelConfigPath,
     adminAuthPath: path.join(temporaryDirectory, 'admin-auth.json'),
+    liveControlPath,
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
     adminPassword,
@@ -124,6 +128,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
     adminAuthPath: path.join(temporaryDirectory, 'admin-auth.json'),
+    liveControlPath,
     adminCookie,
   };
 }
@@ -232,6 +237,9 @@ test('管理页面需登录，登录后提供内容、知识库与模型设置',
   assert.match(response.body, /知识库/);
   assert.match(response.body, /API Key/);
   assert.match(response.body, /保存全部更改/);
+  assert.match(response.body, /对话模式/);
+  assert.match(response.body, /主持模式/);
+  assert.match(response.body, /保存并播报到前台/);
   assert.doesNotMatch(response.body, /资料来源/);
 });
 
@@ -242,7 +250,9 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.equal(pageResponse.statusCode, 200);
   assert.match(pageResponse.headers['content-type'], /text\/html/);
   assert.match(pageResponse.headers['content-security-policy'], /media-src 'self'/);
-  assert.match(pageResponse.body, /主持开场/);
+  assert.match(pageResponse.body, /id="live-mode-pill"/);
+  assert.match(pageResponse.body, /后台主持控制已接管/);
+  assert.doesNotMatch(pageResponse.body, /主持开场/);
   assert.equal((pageResponse.body.match(/data-avatar-video=/g) ?? []).length, 4);
   assert.doesNotMatch(pageResponse.body, /资料来源/);
 
@@ -281,6 +291,196 @@ test('数字人前台和四态配置可直接访问', async (t) => {
     '什么是大未来项目？',
   ]);
   assert.match(avatarConfig.contentRevision, /^[a-f0-9]{64}$/);
+});
+
+test('主持词可持久化，主持模式阻止问答且控制指令保留原文', async (t) => {
+  const { app, liveControlPath } = await createTestApp(t);
+  const initial = (
+    await adminInject(app, { method: 'GET', url: '/api/live-control' })
+  ).json();
+
+  assert.equal(initial.mode, 'dialogue');
+  assert.equal(initial.sequence, 0);
+  assert.equal(initial.scripts.length, 1);
+  assert.match(initial.revision, /^[a-f0-9]{64}$/);
+  assert.equal((await stat(liveControlPath)).mode & 0o777, 0o600);
+
+  const scripts = [
+    {
+      id: 'opening',
+      title: '正式开场',
+      text: '各位来宾，上午好。欢迎来到今天的活动现场。',
+    },
+    {
+      id: 'transition',
+      title: '环节过渡',
+      text: '接下来，让我们进入第二个环节。',
+    },
+  ];
+  const savedResponse = await adminInject(app, {
+    method: 'PUT',
+    url: '/api/live-control',
+    payload: { revision: initial.revision, scripts },
+  });
+  assert.equal(savedResponse.statusCode, 200, savedResponse.body);
+  const saved = savedResponse.json();
+  assert.deepEqual(saved.scripts, scripts);
+  assert.notEqual(saved.revision, initial.revision);
+  assert.deepEqual(JSON.parse(await readFile(liveControlPath, 'utf8')), {
+    version: 1,
+    scripts,
+  });
+
+  const conflict = await adminInject(app, {
+    method: 'PUT',
+    url: '/api/live-control',
+    payload: { revision: initial.revision, scripts },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error, 'LIVE_CONTROL_VERSION_CONFLICT');
+
+  const switched = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/mode',
+    payload: { mode: 'hosting' },
+  });
+  assert.equal(switched.statusCode, 200);
+  assert.equal(switched.json().mode, 'hosting');
+  assert.equal(switched.json().sequence, 1);
+
+  const hostingHealth = (
+    await app.inject({ method: 'GET', url: '/health' })
+  ).json();
+  assert.equal(hostingHealth.ready, true);
+  assert.equal(hostingHealth.liveControl.mode, 'hosting');
+  assert.equal(hostingHealth.model.status, 'unconfigured');
+
+  const blockedAnswer = await app.inject({
+    method: 'POST',
+    url: '/answer',
+    payload: { question: '现在可以提问吗？' },
+  });
+  assert.equal(blockedAnswer.statusCode, 409);
+  assert.equal(blockedAnswer.json().error, 'HOSTING_MODE_ACTIVE');
+  assert.equal(blockedAnswer.json().answer, HOSTING_MODE_TEXT);
+
+  const presented = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/present',
+    payload: { scriptId: 'transition' },
+  });
+  assert.equal(presented.statusCode, 200);
+  assert.equal(presented.json().command.type, 'present');
+  assert.equal(presented.json().command.sequence, 2);
+  assert.deepEqual(presented.json().command.script, scripts[1]);
+
+  const stopped = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/stop',
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  assert.equal(stopped.json().mode, 'hosting');
+  assert.equal(stopped.json().sequence, 3);
+  assert.equal(stopped.json().lastCommand, null);
+
+  const logger = { info() {}, warn() {}, error() {} };
+  const reloaded = new LiveControlStore({
+    configPath: liveControlPath,
+    logger,
+  });
+  await reloaded.start();
+  assert.deepEqual(reloaded.publicSnapshot().scripts, scripts);
+  assert.equal(reloaded.mode, 'dialogue');
+  assert.equal(reloaded.sequence, 0);
+  assert.equal(reloaded.lastCommand, null);
+});
+
+test('实时事件流向已连接前台发送模式、主持词和停止指令', async (t) => {
+  const { app } = await createTestApp(t);
+  await app.listen({ host: '127.0.0.1', port: 0 });
+  const address = app.server.address();
+  assert.ok(address && typeof address === 'object');
+
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const eventResponse = await fetch(
+    `http://127.0.0.1:${address.port}/api/live/events`,
+    { signal: controller.signal },
+  );
+  assert.equal(eventResponse.status, 200);
+  assert.match(eventResponse.headers.get('content-type'), /text\/event-stream/);
+  const reader = eventResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let eventText = '';
+
+  async function readUntil(pattern, timeoutMs = 2_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!pattern.test(eventText)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`等待 SSE 事件超时：${pattern}`);
+      }
+      const result = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`等待 SSE 事件超时：${pattern}`)), remaining),
+        ),
+      ]);
+      if (result.done) {
+        throw new Error('SSE 连接在目标事件到达前结束');
+      }
+      eventText += decoder.decode(result.value, { stream: true });
+    }
+  }
+
+  await readUntil(/event: sync[\s\S]*"mode":"dialogue"/);
+  await waitUntil(async () => {
+    const snapshot = (
+      await adminInject(app, { method: 'GET', url: '/api/live-control' })
+    ).json();
+    assert.equal(snapshot.connectedClients, 1);
+  });
+
+  const initial = (
+    await adminInject(app, { method: 'GET', url: '/api/live-control' })
+  ).json();
+  const exactText = '这是必须逐字下发的主持词，不得由模型改写。';
+  const saved = await adminInject(app, {
+    method: 'PUT',
+    url: '/api/live-control',
+    payload: {
+      revision: initial.revision,
+      scripts: [{ id: 'exact-script', title: '原文测试', text: exactText }],
+    },
+  });
+  assert.equal(saved.statusCode, 200, saved.body);
+
+  const presented = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/present',
+    payload: { scriptId: 'exact-script' },
+  });
+  assert.equal(presented.statusCode, 200, presented.body);
+  await readUntil(/event: present/);
+  assert.match(eventText, new RegExp(JSON.stringify(exactText).slice(1, -1)));
+  assert.match(eventText, /"type":"present"/);
+
+  const stopped = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/stop',
+    payload: {},
+  });
+  assert.equal(stopped.statusCode, 200);
+  await readUntil(/event: stop/);
+
+  await reader.cancel();
+  await waitUntil(async () => {
+    const snapshot = (
+      await adminInject(app, { method: 'GET', url: '/api/live-control' })
+    ).json();
+    assert.equal(snapshot.connectedClients, 0);
+  });
 });
 
 test('访客快捷问题随内容工作台保存结果和版本号更新', async (t) => {
@@ -401,9 +601,14 @@ test('外部文件修改不会被 Web 保存静默覆盖', async (t) => {
   );
 });
 
-test('内容和模型配置接口均要求登录且拒绝跨源会话', async (t) => {
+test('内容、模型和主持控制接口均要求登录且拒绝跨源会话', async (t) => {
   const { app } = await createTestApp(t);
-  for (const url of ['/api/content', '/api/knowledge', '/api/model-config']) {
+  for (const url of [
+    '/api/content',
+    '/api/knowledge',
+    '/api/model-config',
+    '/api/live-control',
+  ]) {
     const unauthenticated = await app.inject({ method: 'GET', url });
     assert.equal(unauthenticated.statusCode, 401);
     assert.equal(unauthenticated.json().error, 'ADMIN_AUTH_REQUIRED');
@@ -426,7 +631,12 @@ test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {
     adminApiKey: 'test-admin-key',
   });
 
-  for (const url of ['/api/content', '/api/knowledge', '/api/model-config']) {
+  for (const url of [
+    '/api/content',
+    '/api/knowledge',
+    '/api/model-config',
+    '/api/live-control',
+  ]) {
     assert.equal((await app.inject({ method: 'GET', url })).statusCode, 401);
     const authorized = await app.inject({
       method: 'GET',

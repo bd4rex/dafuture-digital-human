@@ -38,6 +38,20 @@
     </header>
 
     <main>
+      <nav class="mode-tabs" role="tablist" aria-label="数字人运行模式">
+        <button class="mode-tab active" id="dialogue-tab" type="button" role="tab" aria-selected="true" aria-controls="dialogue-panel" data-workbench-mode="dialogue">
+          <span class="mode-tab-icon" aria-hidden="true">问</span>
+          <span><strong>对话模式</strong><small>大语言模型问答</small></span>
+          <i aria-hidden="true"></i>
+        </button>
+        <button class="mode-tab" id="hosting-tab" type="button" role="tab" aria-selected="false" aria-controls="hosting-panel" data-workbench-mode="hosting">
+          <span class="mode-tab-icon" aria-hidden="true">播</span>
+          <span><strong>主持模式</strong><small>预设文稿实时播报</small></span>
+          <i aria-hidden="true"></i>
+        </button>
+      </nav>
+
+      <section class="mode-panel" id="dialogue-panel" role="tabpanel" aria-labelledby="dialogue-tab">
       <section class="intro" aria-labelledby="page-title">
         <div>
           <p class="eyebrow">CONTENT WORKBENCH · MVP</p>
@@ -179,6 +193,103 @@
             <p class="answer-meta" id="answer-meta" hidden></p>
           </section>
         </aside>
+      </section>
+      </section>
+
+      <section class="mode-panel" id="hosting-panel" role="tabpanel" aria-labelledby="hosting-tab" hidden>
+        <section class="host-intro" aria-labelledby="hosting-title">
+          <div>
+            <p class="eyebrow">LIVE HOST CONTROL · DETERMINISTIC</p>
+            <h1 id="hosting-title">预先写好主持词，点击哪段，前台就播哪段。</h1>
+            <p>主持模式不调用大语言模型。主持词保存到服务器，后台指令会实时发送给所有已打开的数字人前台。</p>
+          </div>
+          <dl class="host-status-board" aria-label="主持控制状态">
+            <div><dt>当前模式</dt><dd id="host-mode-state">读取中</dd></div>
+            <div><dt>已连接前台</dt><dd><strong id="host-connected-count">0</strong>&nbsp;个</dd></div>
+            <div><dt>最近播报</dt><dd id="host-last-command">暂无</dd></div>
+          </dl>
+        </section>
+
+        <section class="host-workspace" aria-label="主持词与实时控制">
+          <aside class="panel host-library-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">主持词目录</p>
+                <h2>预设段落</h2>
+              </div>
+              <button class="icon-button" id="add-host-script" type="button" aria-label="新增主持词" title="新增主持词"><span aria-hidden="true">＋</span></button>
+            </div>
+            <div class="host-script-list" id="host-script-list" role="listbox" aria-label="主持词列表"></div>
+            <div class="library-footer">
+              <span id="host-script-count">0 段主持词</span>
+              <span>持久化保存</span>
+            </div>
+          </aside>
+
+          <section class="panel host-editor-panel" aria-labelledby="host-editor-title">
+            <div class="empty-state" id="host-empty-state">
+              <span class="empty-mark" aria-hidden="true">播</span>
+              <h2>选择一段主持词</h2>
+              <p>编辑保存后，可直接发送到数字人前台播报。</p>
+            </div>
+
+            <form id="host-script-form" class="content-form" hidden novalidate>
+              <div class="panel-heading editor-heading">
+                <div>
+                  <p class="section-kicker">主持词编辑</p>
+                  <h2 id="host-editor-title">确定性播报内容</h2>
+                </div>
+                <span class="record-position" id="host-record-position"></span>
+              </div>
+              <div class="form-grid">
+                <label class="field field-wide">
+                  <span class="field-label">段落名称 <b>必填</b></span>
+                  <input id="host-script-title" maxlength="100" placeholder="例如：欢迎开场" required>
+                </label>
+                <label class="field field-wide">
+                  <span class="field-label">主持词内容 <b>必填</b></span>
+                  <textarea id="host-script-text" rows="12" maxlength="5000" placeholder="填写需要数字人原样播报的内容。" required></textarea>
+                  <small><span id="host-text-length">0</span> / 5000 字；播报时不经过大语言模型改写。</small>
+                </label>
+              </div>
+              <div class="editor-actions host-editor-actions">
+                <div><button class="button button-danger" id="delete-host-script" type="button">删除</button></div>
+                <div>
+                  <button class="button button-quiet" id="move-host-up" type="button">上移</button>
+                  <button class="button button-quiet" id="move-host-down" type="button">下移</button>
+                  <button class="button button-secondary" id="duplicate-host-script" type="button">复制一段</button>
+                </div>
+              </div>
+            </form>
+          </section>
+
+          <aside class="panel host-control-panel" aria-labelledby="host-control-title">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">实时控制</p>
+                <h2 id="host-control-title">前台播报</h2>
+              </div>
+              <span class="live-badge">LIVE</span>
+            </div>
+            <div class="host-live-indicator" id="host-live-indicator">
+              <span aria-hidden="true"></span>
+              <div><strong>主持模式待命</strong><small>选择一段主持词开始</small></div>
+            </div>
+            <div class="host-selected-preview">
+              <span>当前选择</span>
+              <strong id="host-selected-title">尚未选择</strong>
+              <p id="host-selected-preview">从左侧选择一段主持词。</p>
+            </div>
+            <p class="dialog-message host-control-message" id="host-control-message" aria-live="polite"></p>
+            <div class="host-control-actions">
+              <button class="button button-primary" id="broadcast-host-script" type="button" disabled>保存并播报到前台</button>
+              <button class="button button-danger" id="stop-host-broadcast" type="button">停止当前播报</button>
+              <button class="button button-quiet" id="save-host-scripts" type="button" disabled>仅保存主持词</button>
+              <button class="button button-secondary" id="return-dialogue-mode" type="button">返回对话模式</button>
+            </div>
+            <p class="host-control-note">新指令会立即中断上一段播报。服务重启后主持词仍保留，但不会自动重播。</p>
+          </aside>
+        </section>
       </section>
     </main>
 

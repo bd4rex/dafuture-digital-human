@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY --chown=node:node server.js admin-auth.js knowledge-store.js ./
+COPY --chown=node:node server.js admin-auth.js knowledge-store.js live-control-store.js ./
 COPY --chown=node:node public ./public
 
 RUN mkdir -p /data && chown node:node /data
@@ -18,6 +18,7 @@ ENV HOST=0.0.0.0 \
     KNOWLEDGE_FILE=/data/knowledge.json \
     KNOWLEDGE_FILES_DIR=/data/knowledge-files \
     ADMIN_AUTH_FILE=/data/admin-auth.json \
+    LIVE_CONTROL_FILE=/data/host-scripts.json \
     CONTENT_POLL_INTERVAL_MS=2000
 
 EXPOSE 8080

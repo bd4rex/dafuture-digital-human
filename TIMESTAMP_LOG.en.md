@@ -97,3 +97,13 @@
 
 - Task: further simplify first-time password setup for the demo by removing the same-origin restriction represented by “setup must originate from the current administration page.”
 - Implementation: while no administration password exists, the setup endpoint no longer checks the client address or page origin. After the password is created, sign-in and administration APIs retain their existing password, session, and same-origin protections.
+
+## 2026-09-04 23:20 +0800
+
+- Task: implement administration-controlled live switching between Dialogue and Hosting modes, combining flexible model-backed conversation with deterministic on-site presentation.
+- Administration control: the workbench now has real mode tabs and a hosting-script area for creating, editing, duplicating, ordering, deleting, and persistently saving multiple scripts. Clicking a script sends its saved text verbatim to every connected avatar frontend; the operator can also stop all playback or return everyone to Dialogue mode.
+- Frontend behavior: Dialogue mode continues to use the existing OpenAI-compatible model, curated content, and imported knowledge. Hosting mode disables typed questions, quick questions, the microphone, and the Q&A endpoint. A new hosting command interrupts the previous one, Stop leaves the frontend in hosting standby, and returning to Dialogue restores Q&A.
+- Runtime boundary: scripts are atomically persisted in a separate `host-scripts.json` file with `0600` permissions, while the active mode and last presentation command remain memory-only. A service restart always returns to Dialogue; already-open pages resynchronize after SSE reconnect without replaying an old command.
+- Verification: all 34 automated tests passed and `npm audit --omit=dev` reported zero vulnerabilities. A real browser with two concurrently connected avatar pages verified synchronized modes, verbatim playback, interruption, global stop, Q&A restoration, and no-refresh recovery across a service restart. The workbench and avatar passed desktop and 390×844 mobile checks without horizontal overflow, and all checked consoles reported zero errors and warnings.
+- Limitation: the local Docker daemon was unavailable, so the image was not rebuilt in this iteration. The Dockerfile and named-volume persistence paths were updated for the feature.
+- Status: implementation and acceptance are complete. Runtime scripts, administration credentials, knowledge data, and model credentials remain Git-ignored and outside the public repository.

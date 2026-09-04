@@ -152,6 +152,7 @@ a {
 }
 
 .topbar-actions,
+.mode-pill,
 .service-pill,
 .quiet-action {
   display: flex;
@@ -162,6 +163,7 @@ a {
   gap: 10px;
 }
 
+.mode-pill,
 .service-pill,
 .quiet-action {
   min-height: 38px;
@@ -171,6 +173,32 @@ a {
   background: rgba(8, 28, 41, 0.58);
   font-size: 11px;
   font-weight: 650;
+}
+
+.mode-pill {
+  gap: 8px;
+  padding: 8px 13px;
+  color: #bfe7df;
+}
+
+.mode-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 0 5px rgba(120, 168, 255, 0.1);
+}
+
+.mode-pill[data-mode="hosting"] {
+  border-color: rgba(255, 176, 143, 0.32);
+  color: #ffd2bf;
+  background: rgba(68, 38, 33, 0.5);
+}
+
+.mode-pill[data-mode="hosting"] .mode-dot {
+  background: var(--coral);
+  box-shadow: 0 0 0 5px rgba(255, 176, 143, 0.1);
+  animation: mode-pulse 1.8s ease-in-out infinite;
 }
 
 .service-pill {
@@ -728,26 +756,68 @@ button.quiet-action {
   line-height: 1.7;
 }
 
-.present-button {
-  display: inline-flex;
-  min-width: 112px;
-  min-height: 42px;
-  gap: 7px;
-  align-items: center;
-  justify-content: center;
-  padding: 9px 14px;
-  border: 1px solid rgba(97, 225, 204, 0.28);
-  border-radius: 999px;
-  color: var(--mint);
-  background: var(--mint-soft);
-  font-size: 11px;
-  font-weight: 750;
-  transition: transform 160ms ease, background 160ms ease;
+.hosting-banner {
+  display: grid;
+  grid-template-columns: 45px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 18px;
+  padding: 16px 17px;
+  border: 1px solid rgba(255, 176, 143, 0.26);
+  border-radius: 17px;
+  background:
+    linear-gradient(135deg, rgba(255, 176, 143, 0.09), transparent),
+    rgba(46, 28, 29, 0.48);
 }
 
-.present-button:hover {
-  background: rgba(97, 225, 204, 0.2);
-  transform: translateY(-1px);
+.hosting-banner-icon {
+  display: grid;
+  width: 45px;
+  height: 45px;
+  place-items: center;
+  border-radius: 14px;
+  color: #301b19;
+  background: linear-gradient(145deg, #ffd0bb, #ff9f7b);
+  font-size: 15px;
+  font-weight: 850;
+  box-shadow: 0 9px 26px rgba(255, 143, 113, 0.18);
+}
+
+.hosting-banner small,
+.hosting-banner strong,
+.hosting-banner p {
+  display: block;
+  margin: 0;
+}
+
+.hosting-banner small {
+  color: var(--coral);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.hosting-banner strong {
+  margin-top: 5px;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hosting-banner p {
+  display: -webkit-box;
+  margin-top: 5px;
+  overflow: hidden;
+  color: #c9adb0;
+  font-size: 10px;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+body[data-live-mode="hosting"] .conversation-panel {
+  border-color: rgba(255, 176, 143, 0.24);
 }
 
 .conversation-log {
@@ -819,6 +889,19 @@ button.quiet-action {
   background: rgba(113, 47, 49, 0.24);
 }
 
+.message-hosting > div {
+  border-color: rgba(255, 176, 143, 0.26);
+  background: rgba(75, 43, 43, 0.48);
+}
+
+.message-hosting .message-avatar {
+  background: var(--coral);
+}
+
+.message-hosting .message-name {
+  color: var(--coral);
+}
+
 .message-pending > div > p:last-child::after {
   display: inline-block;
   width: 1.2em;
@@ -855,6 +938,11 @@ button.quiet-action {
   background: var(--mint-soft);
 }
 
+.quick-question-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
 .question-composer {
   display: grid;
   min-height: 66px;
@@ -873,6 +961,15 @@ button.quiet-action {
   box-shadow: 0 0 0 4px rgba(97, 225, 204, 0.07);
 }
 
+.question-composer[aria-disabled="true"] {
+  border-color: rgba(255, 176, 143, 0.16);
+  background: rgba(34, 24, 28, 0.52);
+}
+
+.question-composer[aria-disabled="true"]:focus-within {
+  box-shadow: none;
+}
+
 .question-composer textarea {
   width: 100%;
   max-height: 124px;
@@ -889,6 +986,11 @@ button.quiet-action {
 
 .question-composer textarea::placeholder {
   color: #708994;
+}
+
+.question-composer textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .voice-input-button {
@@ -957,7 +1059,7 @@ button.quiet-action {
 }
 
 .send-button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   filter: grayscale(0.48);
   opacity: 0.68;
 }
@@ -1072,6 +1174,12 @@ button.quiet-action {
 @keyframes pending-dots {
   from { width: 0; }
   to { width: 1.2em; }
+}
+
+@keyframes mode-pulse {
+  50% {
+    box-shadow: 0 0 0 8px rgba(255, 176, 143, 0.04);
+  }
 }
 
 @media (max-width: 1080px) {
@@ -1210,10 +1318,6 @@ button.quiet-action {
 
   .conversation-heading h1 {
     font-size: 30px;
-  }
-
-  .present-button {
-    margin-top: 17px;
   }
 
   .conversation-log {

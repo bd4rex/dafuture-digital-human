@@ -22,6 +22,10 @@
       </a>
 
       <div class="topbar-actions">
+        <span class="mode-pill" id="live-mode-pill" data-mode="dialogue">
+          <span class="mode-dot" aria-hidden="true"></span>
+          <span id="live-mode-label">对话模式</span>
+        </span>
         <span class="service-pill" id="service-pill">
           <span class="service-dot" aria-hidden="true"></span>
           <span id="service-label">正在连接内容服务</span>
@@ -179,13 +183,18 @@
           <div>
             <p class="eyebrow">SMART CAMPUS GUIDE</p>
             <h1 id="conversation-title">有什么想了解的？</h1>
-            <p>我会结合后台内容，由大语言模型生成并播报答案。</p>
+            <p id="conversation-description">我会结合后台内容，由大语言模型生成并播报答案。</p>
           </div>
-          <button class="present-button" id="presentation-button" type="button">
-            <span aria-hidden="true">▷</span>
-            主持开场
-          </button>
         </div>
+
+        <section class="hosting-banner" id="hosting-banner" aria-live="polite" hidden>
+          <span class="hosting-banner-icon" aria-hidden="true">播</span>
+          <div>
+            <small>后台主持控制已接管</small>
+            <strong id="hosting-script-title">等待主持人选择文稿</strong>
+            <p id="hosting-script-preview">主持模式下暂不接受现场提问。</p>
+          </div>
+        </section>
 
         <div class="conversation-log" id="conversation-log" aria-live="polite" aria-relevant="additions">
           <article class="message message-assistant">

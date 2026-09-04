@@ -10,6 +10,7 @@ import Fastify from 'fastify';
 
 import { AdminAuthStore } from './admin-auth.js';
 import { KnowledgeStore, KNOWLEDGE_LIMITS } from './knowledge-store.js';
+import { LiveControlStore } from './live-control-store.js';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONTENT_PATH = path.join(MODULE_DIR, 'content.json');
@@ -19,6 +20,7 @@ const AVATAR_MEDIA_FILENAME = /^(idle|thinking|speaking|presenting)\.(webm|mov)$
 export const NO_ANSWER_TEXT = '当前内容中暂无相关信息。';
 export const MODEL_NOT_CONFIGURED_TEXT =
   '大语言模型尚未配置，请先在后台完成 API 设置。';
+export const HOSTING_MODE_TEXT = '当前正在主持模式，请稍后再提问。';
 export const DEFAULT_SYSTEM_PROMPT =
   '你是“大未来”数字人问答助手。请结合后台已配置的内容回答用户问题。回答应准确、简洁、自然，适合直接显示和播报。涉及日期、地点、费用、人员、规则等事实时不得猜测。';
 
@@ -1210,6 +1212,11 @@ export async function buildApp(options = {}) {
       process.env.ADMIN_AUTH_FILE ??
       path.join(path.dirname(contentPath), 'admin-auth.json'),
   );
+  const liveControlPath = path.resolve(
+    options.liveControlPath ??
+      process.env.LIVE_CONTROL_FILE ??
+      path.join(path.dirname(contentPath), 'host-scripts.json'),
+  );
   const pollIntervalMs = integerSetting(
     options.pollIntervalMs ?? process.env.CONTENT_POLL_INTERVAL_MS,
     2_000,
@@ -1258,6 +1265,22 @@ export async function buildApp(options = {}) {
     logger: app.log,
   });
   await knowledgeStore.start();
+  const liveControlStore = new LiveControlStore({
+    configPath: liveControlPath,
+    initialScripts: [
+      {
+        id: 'welcome-opening',
+        title: '欢迎开场',
+        text:
+          typeof avatarConfigTemplate.presentationText === 'string' &&
+          avatarConfigTemplate.presentationText.trim()
+            ? avatarConfigTemplate.presentationText
+            : '大家好，欢迎来到大未来数字人问答体验。',
+      },
+    ],
+    logger: app.log,
+  });
+  await liveControlStore.start();
   const adminAuthStore = new AdminAuthStore({
     configPath: adminAuthPath,
     presetPassword: adminPassword,
@@ -1314,10 +1337,12 @@ export async function buildApp(options = {}) {
     const modelConnection = modelConfigStore.connection;
     const modelReady =
       modelConfigured && modelConnection.status !== 'unavailable';
-    const ready = contentReady && modelReady;
+    const ready =
+      contentReady && (liveControlStore.mode === 'hosting' || modelReady);
     const degraded =
       Boolean(contentStore.lastReloadError) ||
-      modelConnection.status === 'unverified';
+      (liveControlStore.mode === 'dialogue' &&
+        modelConnection.status === 'unverified');
 
     return {
       status: ready ? (degraded ? 'degraded' : 'ready') : 'not_ready',
@@ -1340,6 +1365,13 @@ export async function buildApp(options = {}) {
         revision: knowledgeStore.revision,
         loadedAt: knowledgeStore.loadedAt,
       },
+      liveControl: {
+        status: 'current',
+        ready: true,
+        mode: liveControlStore.mode,
+        scriptCount: liveControlStore.scripts.length,
+        revision: liveControlStore.revision,
+      },
       model: {
         status: modelConnection.status,
         ready: modelReady,
@@ -1356,7 +1388,29 @@ export async function buildApp(options = {}) {
   app.decorate('contentStore', contentStore);
   app.decorate('modelConfigStore', modelConfigStore);
   app.decorate('knowledgeStore', knowledgeStore);
+  app.decorate('liveControlStore', liveControlStore);
   app.decorate('adminAuthStore', adminAuthStore);
+  const liveClients = new Map();
+  const writeLiveEvent = (response, event) => {
+    if (response.destroyed || response.writableEnded) {
+      return;
+    }
+    response.write(`id: ${event.sequence}\n`);
+    response.write(`event: ${event.type}\n`);
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const broadcastLiveEvent = (event) => {
+    for (const response of liveClients.keys()) {
+      writeLiveEvent(response, event);
+    }
+  };
+  app.addHook('preClose', async () => {
+    for (const [response, heartbeat] of liveClients) {
+      clearInterval(heartbeat);
+      response.end();
+    }
+    liveClients.clear();
+  });
   app.addHook('onClose', async () => {
     contentStore.stop();
   });
@@ -1401,6 +1455,18 @@ export async function buildApp(options = {}) {
     reply.code(204).send(),
   );
   app.options('/api/model-config/test', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/live-control', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/live-control/mode', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/live-control/present', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/live-control/stop', async (_request, reply) =>
     reply.code(204).send(),
   );
 
@@ -1534,6 +1600,45 @@ export async function buildApp(options = {}) {
       .type('application/json; charset=utf-8')
       .send(buildAvatarConfig()),
   );
+
+  app.get('/api/live/state', async (_request, reply) =>
+    reply
+      .header('Cache-Control', 'no-store')
+      .send(liveControlStore.publicLiveState()),
+  );
+
+  app.get('/api/live/events', async (request, reply) => {
+    const response = reply.raw;
+    reply.hijack();
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': corsOrigin,
+      ...(corsOrigin !== '*' ? { Vary: 'Origin' } : {}),
+    });
+    response.write('retry: 2000\n\n');
+    writeLiveEvent(response, liveControlStore.syncEvent());
+
+    const heartbeat = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) {
+        response.write(': keepalive\n\n');
+      }
+    }, 15_000);
+    heartbeat.unref?.();
+    liveClients.set(response, heartbeat);
+
+    const cleanup = () => {
+      const activeHeartbeat = liveClients.get(response);
+      if (activeHeartbeat) {
+        clearInterval(activeHeartbeat);
+        liveClients.delete(response);
+      }
+    };
+    request.raw.once('aborted', cleanup);
+    response.once('close', cleanup);
+  });
 
   app.get('/avatar-media/:filename', async (request, reply) => {
     const { filename } = request.params;
@@ -1696,7 +1801,7 @@ export async function buildApp(options = {}) {
 
   app.get('/api', async () => ({
     service: '大未来数字人问答 MVP',
-    version: '0.3.0',
+    version: '0.4.0',
     contentCount: contentStore.items.length,
     knowledgeDocumentCount: knowledgeStore.documents.length,
     knowledgeChunkCount: knowledgeStore.chunkCount(),
@@ -1708,6 +1813,9 @@ export async function buildApp(options = {}) {
       knowledgeImport: 'POST /api/knowledge/import',
       modelConfig: 'GET,PUT /api/model-config',
       modelTest: 'POST /api/model-config/test',
+      liveState: 'GET /api/live/state',
+      liveEvents: 'GET /api/live/events',
+      liveControl: 'GET,PUT /api/live-control',
       health: 'GET /health',
       readiness: 'GET /ready',
     },
@@ -1719,6 +1827,132 @@ export async function buildApp(options = {}) {
     const health = buildHealthPayload();
     return reply.code(health.ready ? 200 : 503).send(health);
   });
+
+  app.get(
+    '/api/live-control',
+    { preHandler: requireAdminAccess },
+    async (request) => ({
+      ...liveControlStore.publicSnapshot({
+        connectedClients: liveClients.size,
+      }),
+      accessMode: request.adminAccessMode,
+    }),
+  );
+
+  app.put(
+    '/api/live-control',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        typeof body.revision !== 'string' ||
+        !Array.isArray(body.scripts) ||
+        Object.keys(body).some(
+          (key) => !['revision', 'scripts'].includes(key),
+        )
+      ) {
+        return reply.code(400).send({
+          error: 'LIVE_CONTROL_VALIDATION_ERROR',
+          message: '请求体必须只包含 revision 字符串和 scripts 数组。',
+        });
+      }
+      return {
+        ...(await liveControlStore.saveScripts(body.scripts, body.revision)),
+        connectedClients: liveClients.size,
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
+
+  app.post(
+    '/api/live-control/mode',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        typeof body.mode !== 'string' ||
+        Object.keys(body).some((key) => key !== 'mode')
+      ) {
+        return reply.code(400).send({
+          error: 'LIVE_CONTROL_MODE_INVALID',
+          message: '请求体必须只包含 mode。',
+        });
+      }
+      const event = liveControlStore.switchMode(body.mode);
+      if (event) {
+        broadcastLiveEvent(event);
+      }
+      return {
+        ...liveControlStore.publicSnapshot({
+          connectedClients: liveClients.size,
+        }),
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
+
+  app.post(
+    '/api/live-control/present',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        Array.isArray(body) ||
+        typeof body.scriptId !== 'string' ||
+        Object.keys(body).some((key) => key !== 'scriptId')
+      ) {
+        return reply.code(400).send({
+          error: 'LIVE_CONTROL_VALIDATION_ERROR',
+          message: '请求体必须只包含 scriptId。',
+        });
+      }
+      const event = liveControlStore.present(body.scriptId);
+      broadcastLiveEvent(event);
+      return {
+        ...liveControlStore.publicSnapshot({
+          connectedClients: liveClients.size,
+        }),
+        command: event,
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
+
+  app.post(
+    '/api/live-control/stop',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const body = request.body;
+      if (
+        body !== undefined &&
+        body !== null &&
+        (typeof body !== 'object' ||
+          Array.isArray(body) ||
+          Object.keys(body).length > 0)
+      ) {
+        return reply.code(400).send({
+          error: 'LIVE_CONTROL_VALIDATION_ERROR',
+          message: '停止播报请求不需要参数。',
+        });
+      }
+      const event = liveControlStore.stop();
+      broadcastLiveEvent(event);
+      return {
+        ...liveControlStore.publicSnapshot({
+          connectedClients: liveClients.size,
+        }),
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
 
   app.get(
     '/api/content',
@@ -1945,6 +2179,15 @@ export async function buildApp(options = {}) {
       },
     },
     async (request, reply) => {
+      if (liveControlStore.mode === 'hosting') {
+        return reply.code(409).send({
+          error: 'HOSTING_MODE_ACTIVE',
+          answered: false,
+          answer: HOSTING_MODE_TEXT,
+          speechText: HOSTING_MODE_TEXT,
+          message: HOSTING_MODE_TEXT,
+        });
+      }
       if (!modelConfigStore.isConfigured()) {
         return reply.code(503).send({
           error: 'MODEL_NOT_CONFIGURED',
@@ -2021,6 +2264,16 @@ export async function buildApp(options = {}) {
     }
 
     if (
+      typeof error.code === 'string' &&
+      error.code.startsWith('LIVE_CONTROL_')
+    ) {
+      return reply.code(error.statusCode ?? 400).send({
+        error: error.code,
+        message: error.message,
+      });
+    }
+
+    if (
       [
         'FST_REQ_FILE_TOO_LARGE',
         'FST_FILES_LIMIT',
@@ -2070,6 +2323,8 @@ export async function buildApp(options = {}) {
             ? '模型配置保存失败，请检查配置文件所在目录的写入权限。'
             : request.routeOptions?.url?.startsWith('/api/knowledge')
               ? '知识库操作失败，请检查存储目录的写入权限。'
+              : request.routeOptions?.url?.startsWith('/api/live-control')
+                ? '主持控制操作失败，请检查主持词文件的写入权限。'
           : '服务暂时无法处理该请求。',
     });
   });

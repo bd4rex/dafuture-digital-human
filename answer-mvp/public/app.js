@@ -10,6 +10,14 @@ const state = {
   modelSaving: false,
   knowledge: null,
   knowledgeImporting: false,
+  liveControl: null,
+  hostScripts: [],
+  hostRevision: null,
+  selectedHostIndex: -1,
+  hostDirty: false,
+  hostSaving: false,
+  liveBusy: false,
+  workbenchMode: 'dialogue',
   toastTimer: null,
 };
 
@@ -83,6 +91,33 @@ const elements = {
   modelSystemPrompt: document.querySelector('#model-system-prompt'),
   modelMessage: document.querySelector('#model-message'),
   logoutAdmin: document.querySelector('#logout-admin'),
+  modeTabs: [...document.querySelectorAll('[data-workbench-mode]')],
+  dialoguePanel: document.querySelector('#dialogue-panel'),
+  hostingPanel: document.querySelector('#hosting-panel'),
+  hostModeState: document.querySelector('#host-mode-state'),
+  hostConnectedCount: document.querySelector('#host-connected-count'),
+  hostLastCommand: document.querySelector('#host-last-command'),
+  addHostScript: document.querySelector('#add-host-script'),
+  hostScriptList: document.querySelector('#host-script-list'),
+  hostScriptCount: document.querySelector('#host-script-count'),
+  hostEmptyState: document.querySelector('#host-empty-state'),
+  hostScriptForm: document.querySelector('#host-script-form'),
+  hostRecordPosition: document.querySelector('#host-record-position'),
+  hostScriptTitle: document.querySelector('#host-script-title'),
+  hostScriptText: document.querySelector('#host-script-text'),
+  hostTextLength: document.querySelector('#host-text-length'),
+  deleteHostScript: document.querySelector('#delete-host-script'),
+  duplicateHostScript: document.querySelector('#duplicate-host-script'),
+  moveHostUp: document.querySelector('#move-host-up'),
+  moveHostDown: document.querySelector('#move-host-down'),
+  hostLiveIndicator: document.querySelector('#host-live-indicator'),
+  hostSelectedTitle: document.querySelector('#host-selected-title'),
+  hostSelectedPreview: document.querySelector('#host-selected-preview'),
+  hostControlMessage: document.querySelector('#host-control-message'),
+  broadcastHostScript: document.querySelector('#broadcast-host-script'),
+  stopHostBroadcast: document.querySelector('#stop-host-broadcast'),
+  saveHostScripts: document.querySelector('#save-host-scripts'),
+  returnDialogueMode: document.querySelector('#return-dialogue-mode'),
   deleteDialog: document.querySelector('#delete-dialog'),
   deleteMessage: document.querySelector('#delete-message'),
   confirmDelete: document.querySelector('#confirm-delete'),
@@ -171,6 +206,438 @@ function updateSaveState(text) {
 function markDirty() {
   state.dirty = true;
   updateSaveState();
+}
+
+function currentHostScript() {
+  return state.hostScripts[state.selectedHostIndex] ?? null;
+}
+
+function setWorkbenchPanel(mode) {
+  state.workbenchMode = mode === 'hosting' ? 'hosting' : 'dialogue';
+  const hosting = state.workbenchMode === 'hosting';
+  elements.dialoguePanel.hidden = hosting;
+  elements.hostingPanel.hidden = !hosting;
+  elements.saveAll.hidden = hosting;
+
+  for (const tab of elements.modeTabs) {
+    const selected = tab.dataset.workbenchMode === state.workbenchMode;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+}
+
+function updateHostSaveState(message = '') {
+  elements.saveHostScripts.disabled =
+    !state.hostDirty || state.hostSaving || !state.hostRevision;
+  elements.saveHostScripts.textContent = state.hostSaving
+    ? '正在保存…'
+    : '仅保存主持词';
+  if (message) {
+    elements.hostControlMessage.textContent = message;
+    elements.hostControlMessage.classList.remove('success');
+  }
+}
+
+function markHostDirty() {
+  state.hostDirty = true;
+  updateHostSaveState('主持词有未保存更改。');
+}
+
+function renderHostList() {
+  elements.hostScriptList.replaceChildren();
+
+  if (state.hostScripts.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'list-empty';
+    empty.textContent = '还没有主持词。点击右上角“＋”新建第一段。';
+    elements.hostScriptList.append(empty);
+  }
+
+  for (const [index, script] of state.hostScripts.entries()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'host-script-item';
+    button.classList.toggle('selected', index === state.selectedHostIndex);
+    button.setAttribute('role', 'option');
+    button.setAttribute(
+      'aria-selected',
+      String(index === state.selectedHostIndex),
+    );
+
+    const order = document.createElement('span');
+    order.className = 'host-script-order';
+    order.textContent = String(index + 1).padStart(2, '0');
+    const content = document.createElement('span');
+    content.className = 'host-script-copy';
+    const title = document.createElement('strong');
+    title.textContent = script.title || '未命名主持词';
+    const preview = document.createElement('small');
+    preview.textContent = script.text || '尚未填写内容';
+    content.append(title, preview);
+    button.append(order, content);
+    button.addEventListener('click', () => {
+      state.selectedHostIndex = index;
+      renderHostList();
+      renderHostEditor();
+      renderHostControl();
+    });
+    elements.hostScriptList.append(button);
+  }
+
+  elements.hostScriptCount.textContent = `${state.hostScripts.length} 段主持词`;
+}
+
+function renderHostEditor() {
+  const script = currentHostScript();
+  elements.hostEmptyState.hidden = Boolean(script);
+  elements.hostScriptForm.hidden = !script;
+  if (!script) {
+    return;
+  }
+
+  for (const field of elements.hostScriptForm.querySelectorAll('.field.invalid')) {
+    field.classList.remove('invalid');
+  }
+  elements.hostScriptTitle.value = script.title;
+  elements.hostScriptText.value = script.text;
+  elements.hostTextLength.textContent = String([...script.text].length);
+  elements.hostRecordPosition.textContent = `${state.selectedHostIndex + 1} / ${state.hostScripts.length}`;
+  elements.moveHostUp.disabled = state.selectedHostIndex <= 0;
+  elements.moveHostDown.disabled =
+    state.selectedHostIndex >= state.hostScripts.length - 1;
+}
+
+function renderHostControl() {
+  const snapshot = state.liveControl;
+  const script = currentHostScript();
+  const hosting = snapshot?.mode === 'hosting';
+  const lastCommand = snapshot?.lastCommand;
+
+  elements.hostModeState.textContent = hosting ? '主持模式' : '对话模式';
+  elements.hostConnectedCount.textContent = String(
+    snapshot?.connectedClients ?? 0,
+  );
+  elements.hostLastCommand.textContent = lastCommand
+    ? `${lastCommand.title} · ${formatDate(lastCommand.issuedAt)}`
+    : '暂无';
+  elements.hostSelectedTitle.textContent = script?.title || '尚未选择';
+  elements.hostSelectedPreview.textContent =
+    script?.text || '从左侧选择一段主持词。';
+
+  elements.hostLiveIndicator.classList.toggle('is-live', hosting);
+  const indicatorTitle = elements.hostLiveIndicator.querySelector('strong');
+  const indicatorHint = elements.hostLiveIndicator.querySelector('small');
+  if (hosting && lastCommand) {
+    indicatorTitle.textContent = `已下发：${lastCommand.title}`;
+    indicatorHint.textContent = '所有已连接前台已收到播报指令';
+  } else if (hosting) {
+    indicatorTitle.textContent = '主持模式待命';
+    indicatorHint.textContent = '选择一段主持词开始';
+  } else {
+    indicatorTitle.textContent = '当前为对话模式';
+    indicatorHint.textContent = '切换到主持模式后可确定性播报';
+  }
+
+  elements.broadcastHostScript.disabled = !script || state.liveBusy;
+  elements.stopHostBroadcast.disabled = !hosting || state.liveBusy;
+  elements.returnDialogueMode.disabled = !hosting || state.liveBusy;
+  for (const tab of elements.modeTabs) {
+    tab.disabled = state.liveBusy;
+  }
+  updateHostSaveState();
+}
+
+function applyLiveSnapshot(snapshot, { replaceScripts = true } = {}) {
+  const selectedId = currentHostScript()?.id;
+  state.liveControl = snapshot;
+  state.hostRevision = replaceScripts ? snapshot.revision : state.hostRevision;
+  if (replaceScripts) {
+    state.hostScripts = Array.isArray(snapshot.scripts)
+      ? snapshot.scripts.map((script) => ({ ...script }))
+      : [];
+    state.selectedHostIndex = state.hostScripts.findIndex(
+      (script) => script.id === selectedId,
+    );
+    if (state.selectedHostIndex < 0 && state.hostScripts.length > 0) {
+      state.selectedHostIndex = 0;
+    }
+    state.hostDirty = false;
+  }
+  setWorkbenchPanel(snapshot.mode);
+  renderHostList();
+  renderHostEditor();
+  renderHostControl();
+}
+
+function createUniqueHostId(base = `host-${Date.now().toString(36)}`) {
+  const used = new Set(state.hostScripts.map((script) => script.id));
+  if (!used.has(base)) {
+    return base;
+  }
+  let suffix = 2;
+  while (used.has(`${base}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}-${suffix}`;
+}
+
+function addHostScript() {
+  state.hostScripts.push({
+    id: createUniqueHostId(),
+    title: '新主持词',
+    text: '',
+  });
+  state.selectedHostIndex = state.hostScripts.length - 1;
+  markHostDirty();
+  renderHostList();
+  renderHostEditor();
+  renderHostControl();
+  elements.hostScriptTitle.focus();
+  elements.hostScriptTitle.select();
+}
+
+function syncHostEditorToState(event) {
+  const script = currentHostScript();
+  if (!script) {
+    return;
+  }
+  if (event.target === elements.hostScriptTitle) {
+    script.title = event.target.value;
+  } else if (event.target === elements.hostScriptText) {
+    script.text = event.target.value;
+    elements.hostTextLength.textContent = String([...script.text].length);
+  } else {
+    return;
+  }
+  event.target.closest('.field')?.classList.remove('invalid');
+  markHostDirty();
+  renderHostList();
+  renderHostControl();
+}
+
+function duplicateHostScript() {
+  const script = currentHostScript();
+  if (!script) {
+    return;
+  }
+  const duplicate = {
+    id: createUniqueHostId(`${script.id}-copy`),
+    title: `${script.title || '主持词'}（副本）`,
+    text: script.text,
+  };
+  state.hostScripts.splice(state.selectedHostIndex + 1, 0, duplicate);
+  state.selectedHostIndex += 1;
+  markHostDirty();
+  renderHostList();
+  renderHostEditor();
+  renderHostControl();
+}
+
+function moveHostScript(offset) {
+  const destination = state.selectedHostIndex + offset;
+  if (
+    state.selectedHostIndex < 0 ||
+    destination < 0 ||
+    destination >= state.hostScripts.length
+  ) {
+    return;
+  }
+  const [script] = state.hostScripts.splice(state.selectedHostIndex, 1);
+  state.hostScripts.splice(destination, 0, script);
+  state.selectedHostIndex = destination;
+  markHostDirty();
+  renderHostList();
+  renderHostEditor();
+  renderHostControl();
+}
+
+function deleteHostScript() {
+  const script = currentHostScript();
+  if (!script || !window.confirm(`确定删除“${script.title || '这段主持词'}”吗？`)) {
+    return;
+  }
+  state.hostScripts.splice(state.selectedHostIndex, 1);
+  state.selectedHostIndex = Math.min(
+    state.selectedHostIndex,
+    state.hostScripts.length - 1,
+  );
+  markHostDirty();
+  renderHostList();
+  renderHostEditor();
+  renderHostControl();
+}
+
+function validateHostScripts() {
+  for (const [index, script] of state.hostScripts.entries()) {
+    if (!script.title.trim()) {
+      return { index, field: 'title', message: '请填写段落名称。' };
+    }
+    if (!script.text.trim()) {
+      return { index, field: 'text', message: '请填写主持词内容。' };
+    }
+  }
+  return null;
+}
+
+function showHostValidationError(validation) {
+  state.selectedHostIndex = validation.index;
+  renderHostList();
+  renderHostEditor();
+  const field =
+    validation.field === 'title'
+      ? elements.hostScriptTitle
+      : elements.hostScriptText;
+  field.closest('.field')?.classList.add('invalid');
+  field.focus();
+  showToast(validation.message, 'error');
+}
+
+async function saveHostScripts() {
+  if (!state.hostDirty) {
+    return true;
+  }
+  if (state.hostSaving || !state.hostRevision) {
+    return false;
+  }
+  const validation = validateHostScripts();
+  if (validation) {
+    showHostValidationError(validation);
+    return false;
+  }
+
+  state.hostSaving = true;
+  updateHostSaveState();
+  try {
+    const snapshot = await requestJson('/api/live-control', {
+      method: 'PUT',
+      body: {
+        revision: state.hostRevision,
+        scripts: state.hostScripts,
+      },
+    });
+    applyLiveSnapshot(snapshot);
+    elements.hostControlMessage.textContent = '主持词已保存并立即生效。';
+    elements.hostControlMessage.classList.add('success');
+    showToast('主持词已持久化保存。');
+    return true;
+  } catch (error) {
+    updateHostSaveState(
+      error.status === 409 ? '主持词版本有冲突，请刷新页面。' : error.message,
+    );
+    showToast(error.message, 'error');
+    return false;
+  } finally {
+    state.hostSaving = false;
+    updateHostSaveState();
+  }
+}
+
+async function loadLiveControl({ silent = false } = {}) {
+  try {
+    const snapshot = await requestJson('/api/live-control');
+    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    return true;
+  } catch (error) {
+    if (!silent && error.status !== 401) {
+      showToast(error.message, 'error');
+    }
+    return false;
+  }
+}
+
+async function switchWorkbenchMode(mode) {
+  if (state.liveBusy || !['dialogue', 'hosting'].includes(mode)) {
+    return;
+  }
+  if (mode === 'dialogue' && state.hostDirty && !(await saveHostScripts())) {
+    return;
+  }
+  if (state.liveControl?.mode === mode) {
+    setWorkbenchPanel(mode);
+    renderHostControl();
+    return;
+  }
+
+  state.liveBusy = true;
+  renderHostControl();
+  elements.hostControlMessage.textContent =
+    mode === 'hosting' ? '正在切换到主持模式…' : '正在恢复对话模式…';
+  elements.hostControlMessage.classList.remove('success');
+  try {
+    const snapshot = await requestJson('/api/live-control/mode', {
+      method: 'POST',
+      body: { mode },
+    });
+    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    elements.hostControlMessage.textContent =
+      mode === 'hosting'
+        ? '主持模式已开启，前台问答已暂停。'
+        : '已恢复对话模式，前台可以继续提问。';
+    elements.hostControlMessage.classList.add('success');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    state.liveBusy = false;
+    renderHostControl();
+  }
+}
+
+async function broadcastSelectedHostScript() {
+  const scriptId = currentHostScript()?.id;
+  if (!scriptId || state.liveBusy) {
+    return;
+  }
+  if (!(await saveHostScripts())) {
+    return;
+  }
+
+  state.liveBusy = true;
+  renderHostControl();
+  elements.hostControlMessage.textContent = '正在向已连接前台发送播报指令…';
+  elements.hostControlMessage.classList.remove('success');
+  try {
+    const snapshot = await requestJson('/api/live-control/present', {
+      method: 'POST',
+      body: { scriptId },
+    });
+    applyLiveSnapshot(snapshot);
+    const connected = snapshot.connectedClients ?? 0;
+    elements.hostControlMessage.textContent =
+      connected > 0
+        ? `已发送到 ${connected} 个前台；新指令会中断上一段播报。`
+        : '指令已下发，但当前没有已连接的前台。';
+    elements.hostControlMessage.classList.add('success');
+    showToast(connected > 0 ? '主持词已发送到前台。' : '已下发，当前无前台连接。');
+  } catch (error) {
+    elements.hostControlMessage.textContent = error.message;
+    showToast(error.message, 'error');
+  } finally {
+    state.liveBusy = false;
+    renderHostControl();
+  }
+}
+
+async function stopHostBroadcast() {
+  if (state.liveBusy || state.liveControl?.mode !== 'hosting') {
+    return;
+  }
+  state.liveBusy = true;
+  renderHostControl();
+  try {
+    const snapshot = await requestJson('/api/live-control/stop', {
+      method: 'POST',
+      body: {},
+    });
+    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    elements.hostControlMessage.textContent = '已通知所有前台停止当前播报。';
+    elements.hostControlMessage.classList.add('success');
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    state.liveBusy = false;
+    renderHostControl();
+  }
 }
 
 function currentItem() {
@@ -988,7 +1455,9 @@ async function saveModelConfig(event) {
 async function refreshHealth() {
   try {
     const health = await requestJson('/health');
-    if (!health.ready) {
+    if (health.liveControl?.mode === 'hosting') {
+      setServiceStatus('online', '主持模式运行中');
+    } else if (!health.ready) {
       setServiceStatus(
         'offline',
         health.model?.status === 'unconfigured'
@@ -1022,6 +1491,10 @@ async function refreshHealth() {
 
 async function testQuestion(event) {
   event.preventDefault();
+  if (state.liveControl?.mode === 'hosting') {
+    showToast('主持模式下问答已暂停，请先返回对话模式。', 'error');
+    return;
+  }
   const question = elements.testQuestion.value.trim();
   if (!question) {
     elements.testQuestion.focus();
@@ -1125,10 +1598,48 @@ elements.cancelModelSettings.addEventListener('click', () => {
   elements.modelDialog.close();
 });
 elements.modelForm.addEventListener('submit', saveModelConfig);
+for (const tab of elements.modeTabs) {
+  tab.addEventListener('click', () => {
+    void switchWorkbenchMode(tab.dataset.workbenchMode);
+  });
+  tab.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const direction = event.key === 'ArrowRight' ? 1 : -1;
+    const currentIndex = elements.modeTabs.indexOf(tab);
+    const target =
+      elements.modeTabs[
+        (currentIndex + direction + elements.modeTabs.length) %
+          elements.modeTabs.length
+      ];
+    target.focus();
+    target.click();
+  });
+}
+elements.addHostScript.addEventListener('click', addHostScript);
+elements.hostScriptForm.addEventListener('input', syncHostEditorToState);
+elements.duplicateHostScript.addEventListener('click', duplicateHostScript);
+elements.moveHostUp.addEventListener('click', () => moveHostScript(-1));
+elements.moveHostDown.addEventListener('click', () => moveHostScript(1));
+elements.deleteHostScript.addEventListener('click', deleteHostScript);
+elements.saveHostScripts.addEventListener('click', () => {
+  void saveHostScripts();
+});
+elements.broadcastHostScript.addEventListener('click', () => {
+  void broadcastSelectedHostScript();
+});
+elements.stopHostBroadcast.addEventListener('click', () => {
+  void stopHostBroadcast();
+});
+elements.returnDialogueMode.addEventListener('click', () => {
+  void switchWorkbenchMode('dialogue');
+});
 elements.logoutAdmin.addEventListener('click', async () => {
   if (
-    state.dirty &&
-    !window.confirm('当前还有未保存的问答修改，确定退出吗？')
+    (state.dirty || state.hostDirty) &&
+    !window.confirm('当前还有未保存的修改，确定退出吗？')
   ) {
     return;
   }
@@ -1136,6 +1647,7 @@ elements.logoutAdmin.addEventListener('click', async () => {
   try {
     await requestJson('/api/admin/logout', { method: 'POST' });
     state.dirty = false;
+    state.hostDirty = false;
     window.location.replace('/');
   } catch (error) {
     elements.logoutAdmin.disabled = false;
@@ -1146,12 +1658,16 @@ elements.logoutAdmin.addEventListener('click', async () => {
 document.addEventListener('keydown', (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
     event.preventDefault();
-    void saveContent();
+    if (state.workbenchMode === 'hosting') {
+      void saveHostScripts();
+    } else {
+      void saveContent();
+    }
   }
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (state.dirty) {
+  if (state.dirty || state.hostDirty) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -1161,11 +1677,16 @@ async function start() {
   await refreshHealth();
   const connected = await loadContent();
   if (connected) {
-    await Promise.all([loadModelConfig(), loadKnowledge()]);
+    await Promise.all([
+      loadModelConfig(),
+      loadKnowledge(),
+      loadLiveControl(),
+    ]);
   }
   renderSelectedKnowledgeFiles();
   syncKnowledgeMode();
   setInterval(() => void refreshHealth(), 10_000);
+  setInterval(() => void loadLiveControl({ silent: true }), 3_000);
 }
 
 void start();

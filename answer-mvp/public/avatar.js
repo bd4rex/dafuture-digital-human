@@ -46,6 +46,8 @@ const DEFAULT_COMPOSER_HINT =
 const elements = {
   servicePill: document.querySelector('#service-pill'),
   serviceLabel: document.querySelector('#service-label'),
+  liveModePill: document.querySelector('#live-mode-pill'),
+  liveModeLabel: document.querySelector('#live-mode-label'),
   soundToggle: document.querySelector('#sound-toggle'),
   soundLabel: document.querySelector('#sound-label'),
   stateLabel: document.querySelector('#avatar-state-label'),
@@ -62,7 +64,11 @@ const elements = {
   voiceInputButton: document.querySelector('#voice-input-button'),
   sendButton: document.querySelector('#send-button'),
   composerHint: document.querySelector('#composer-hint'),
-  presentationButton: document.querySelector('#presentation-button'),
+  conversationTitle: document.querySelector('#conversation-title'),
+  conversationDescription: document.querySelector('#conversation-description'),
+  hostingBanner: document.querySelector('#hosting-banner'),
+  hostingScriptTitle: document.querySelector('#hosting-script-title'),
+  hostingScriptPreview: document.querySelector('#hosting-script-preview'),
   previewPanel: document.querySelector('#preview-panel'),
 };
 
@@ -78,6 +84,11 @@ const runtime = {
   voiceInput: null,
   previewTimer: null,
   soundEnabled: true,
+  liveMode: 'dialogue',
+  liveSequence: -1,
+  liveEventSource: null,
+  liveConnected: false,
+  lastHostedScriptTitle: '',
 };
 
 function wait(milliseconds) {
@@ -349,6 +360,7 @@ class BrowserVoiceInput {
     this.baseText = '';
     this.errorMessage = '';
     this.messageTimer = null;
+    this.externallyDisabled = false;
 
     if (!this.Recognition) {
       this.setState('unsupported');
@@ -387,6 +399,10 @@ class BrowserVoiceInput {
   }
 
   start() {
+    if (this.externallyDisabled) {
+      this.setState('disabled');
+      return;
+    }
     if (!this.recognition) {
       this.setState('unsupported');
       return;
@@ -436,10 +452,34 @@ class BrowserVoiceInput {
       }
     }
     this.active = false;
-    this.setState('idle');
+    this.setState(this.externallyDisabled ? 'disabled' : 'idle');
+  }
+
+  setEnabled(enabled) {
+    const nextDisabled = !enabled;
+    if (this.externallyDisabled === nextDisabled) {
+      return;
+    }
+    this.externallyDisabled = nextDisabled;
+    if (nextDisabled) {
+      this.abort();
+    } else {
+      this.cancelled = false;
+      this.setState(this.recognition ? 'idle' : 'unsupported');
+    }
   }
 
   handleStart() {
+    if (this.externallyDisabled) {
+      this.active = false;
+      try {
+        this.recognition?.abort();
+      } catch {
+        // The recognizer may already be ending after the mode switch.
+      }
+      this.setState('disabled');
+      return;
+    }
     this.active = true;
     this.setState('listening');
   }
@@ -489,13 +529,21 @@ class BrowserVoiceInput {
 
   handleEnd() {
     const shouldSubmit =
+      !this.externallyDisabled &&
       !this.cancelled &&
       !this.errorMessage &&
       this.pendingSubmit &&
       Boolean(this.input.value.trim());
     this.active = false;
     this.pendingSubmit = false;
-    this.setState(this.errorMessage ? 'error' : 'idle', this.errorMessage);
+    this.setState(
+      this.externallyDisabled
+        ? 'disabled'
+        : this.errorMessage
+          ? 'error'
+          : 'idle',
+      this.errorMessage,
+    );
 
     if (shouldSubmit) {
       setTimeout(() => this.form.requestSubmit(), 0);
@@ -506,13 +554,16 @@ class BrowserVoiceInput {
     clearTimeout(this.messageTimer);
     const listening = state === 'starting' || state === 'listening';
     const unsupported = state === 'unsupported';
-    const label = unsupported
+    const disabled = state === 'disabled' || this.externallyDisabled;
+    const label = disabled
+      ? '主持模式下暂停语音输入'
+      : unsupported
       ? '当前浏览器不支持语音输入'
       : listening
         ? '停止并发送语音'
         : '开始语音输入';
 
-    this.button.disabled = unsupported;
+    this.button.disabled = unsupported || disabled;
     this.button.classList.toggle('is-listening', listening);
     this.button.dataset.state = state;
     this.button.setAttribute('aria-pressed', String(listening));
@@ -524,6 +575,7 @@ class BrowserVoiceInput {
       ({
         starting: '正在打开麦克风…',
         listening: '正在聆听，说完后会自动发送；再次点击可提前结束',
+        disabled: '主持模式由后台控制播报，现场提问已暂停',
         unsupported: '当前浏览器不支持语音输入，仍可使用文字提问',
       }[state] ?? DEFAULT_COMPOSER_HINT);
 
@@ -587,6 +639,186 @@ function setServiceStatus(status, label) {
   elements.serviceLabel.textContent = label;
 }
 
+function cancelActiveInteraction(reason = 'live-control-interrupted') {
+  runtime.voiceInput?.abort();
+  runtime.requestController?.abort();
+  runtime.requestController = null;
+  stopSpeech();
+  clearTimeout(runtime.previewTimer);
+  runtime.previewTimer = null;
+  runtime.flow?.reset(reason);
+}
+
+function updateInteractionAvailability() {
+  const hosting = runtime.liveMode === 'hosting';
+  document.body.dataset.liveMode = runtime.liveMode;
+  elements.liveModePill.dataset.mode = runtime.liveMode;
+  elements.liveModeLabel.textContent = hosting ? '主持模式' : '对话模式';
+  elements.hostingBanner.hidden = !hosting;
+  elements.questionForm.setAttribute('aria-disabled', String(hosting));
+  elements.questionInput.disabled = hosting;
+  elements.questionInput.placeholder = hosting
+    ? '主持模式下，现场提问已暂停'
+    : '输入你想问的问题…';
+  elements.sendButton.disabled = hosting || Boolean(runtime.requestController);
+  runtime.voiceInput?.setEnabled(!hosting);
+
+  for (const button of elements.quickQuestions.querySelectorAll('button')) {
+    button.disabled = hosting;
+  }
+
+  if (hosting) {
+    elements.conversationTitle.textContent = '主持模式已开启';
+    elements.conversationDescription.textContent =
+      '内容由后台主持人确定并实时下发，不经过大语言模型改写。';
+    elements.composerHint.textContent =
+      '主持模式由后台控制播报，现场提问已暂停';
+  } else {
+    elements.conversationTitle.textContent = '有什么想了解的？';
+    elements.conversationDescription.textContent =
+      '我会结合后台内容，由大语言模型生成并播报答案。';
+    if (!runtime.voiceInput?.active) {
+      elements.composerHint.textContent = DEFAULT_COMPOSER_HINT;
+    }
+  }
+}
+
+function setLiveMode(mode, reason = 'live-mode-changed') {
+  if (!['dialogue', 'hosting'].includes(mode)) {
+    return false;
+  }
+  const changed = runtime.liveMode !== mode;
+  runtime.liveMode = mode;
+  if (changed) {
+    cancelActiveInteraction(reason);
+    if (mode === 'dialogue') {
+      runtime.lastHostedScriptTitle = '';
+      elements.hostingScriptTitle.textContent = '等待主持人选择文稿';
+      elements.hostingScriptPreview.textContent =
+        '主持模式下暂不接受现场提问。';
+    }
+  }
+  updateInteractionAvailability();
+  if (runtime.flow) {
+    updateStateUI(runtime.flow.state);
+  }
+  return changed;
+}
+
+function beginHostedPresentation(script) {
+  if (
+    !script ||
+    typeof script.title !== 'string' ||
+    typeof script.text !== 'string' ||
+    !script.text.trim()
+  ) {
+    return;
+  }
+
+  const modeChanged = setLiveMode('hosting', 'hosting-mode-started');
+  if (!modeChanged) {
+    cancelActiveInteraction('hosting-command-interrupted');
+  }
+  runtime.lastHostedScriptTitle = script.title;
+  elements.hostingScriptTitle.textContent = `正在播报：${script.title}`;
+  elements.hostingScriptPreview.textContent = script.text;
+  const speechSequence = runtime.flow.beginPresentation();
+  appendMessage('assistant', script.text, { hosting: true });
+  speakText(script.text, speechSequence);
+}
+
+function stopHostedPresentation() {
+  setLiveMode('hosting', 'hosting-mode-synchronized');
+  cancelActiveInteraction('hosting-command-stopped');
+  elements.hostingScriptTitle.textContent = '当前播报已停止';
+  elements.hostingScriptPreview.textContent = '等待后台选择下一段主持词。';
+  updateInteractionAvailability();
+}
+
+function handleLiveEvent(messageEvent) {
+  let event;
+  try {
+    event = JSON.parse(messageEvent.data);
+  } catch {
+    return;
+  }
+  if (
+    !event ||
+    typeof event !== 'object' ||
+    !Number.isInteger(event.sequence) ||
+    event.sequence < 0 ||
+    typeof event.type !== 'string'
+  ) {
+    return;
+  }
+
+  if (event.type === 'sync') {
+    // A lower sequence on a fresh SSE connection means the service restarted.
+    // Runtime mode deliberately resets to dialogue after a restart.
+    runtime.liveSequence = event.sequence;
+    setLiveMode(event.mode, 'live-control-synchronized');
+    void refreshHealth();
+    return;
+  }
+  if (event.sequence <= runtime.liveSequence) {
+    return;
+  }
+  runtime.liveSequence = event.sequence;
+
+  if (event.type === 'mode') {
+    setLiveMode(event.mode, 'live-mode-command');
+    void refreshHealth();
+  } else if (event.type === 'present') {
+    beginHostedPresentation(event.script);
+  } else if (event.type === 'stop') {
+    if (event.mode === 'hosting') {
+      stopHostedPresentation();
+    } else {
+      setLiveMode(event.mode, 'live-stop-command');
+      void refreshHealth();
+    }
+  }
+}
+
+async function loadLiveState() {
+  try {
+    const response = await fetch('/api/live/state', {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const snapshot = await response.json();
+    setLiveMode(snapshot.mode, 'initial-live-mode');
+  } catch {
+    setServiceStatus('offline', '实时控制状态不可用');
+  }
+}
+
+function connectLiveEvents() {
+  if (!('EventSource' in window)) {
+    setServiceStatus('offline', '当前浏览器不支持实时主持控制');
+    setInterval(() => void loadLiveState(), 3_000);
+    return;
+  }
+
+  runtime.liveEventSource?.close();
+  const eventSource = new EventSource('/api/live/events');
+  runtime.liveEventSource = eventSource;
+  for (const type of ['sync', 'mode', 'present', 'stop']) {
+    eventSource.addEventListener(type, handleLiveEvent);
+  }
+  eventSource.addEventListener('open', () => {
+    runtime.liveConnected = true;
+    void refreshHealth();
+  });
+  eventSource.addEventListener('error', () => {
+    runtime.liveConnected = false;
+    setServiceStatus('offline', '实时控制正在重新连接');
+  });
+}
+
 async function refreshHealth() {
   try {
     const response = await fetch('/health', {
@@ -596,7 +828,17 @@ async function refreshHealth() {
       throw new Error(`HTTP ${response.status}`);
     }
     const health = await response.json();
-    if (!health.ready) {
+    if (health.liveControl?.mode) {
+      setLiveMode(health.liveControl.mode, 'health-mode-synchronized');
+    }
+    if (runtime.liveMode === 'hosting') {
+      setServiceStatus(
+        'online',
+        runtime.liveConnected
+          ? '主持控制已连接'
+          : '主持模式运行中，控制通道连接中',
+      );
+    } else if (!health.ready) {
       setServiceStatus('offline', '问答模型待配置');
       if (health.model?.status === 'unavailable') {
         setServiceStatus('offline', '问答模型连接异常');
@@ -625,8 +867,18 @@ async function refreshHealth() {
 
 function updateStateUI(state) {
   const stateConfig = runtime.config.states[state] ?? DEFAULT_CONFIG.states[state];
-  elements.stateLabel.textContent = stateConfig.label;
-  elements.stateHint.textContent = stateConfig.hint;
+  if (runtime.liveMode === 'hosting' && state === 'idle') {
+    elements.stateLabel.textContent = '主持模式';
+    elements.stateHint.textContent = '等待后台下一条播报指令';
+  } else if (runtime.liveMode === 'hosting' && state === 'presenting') {
+    elements.stateLabel.textContent = '正在主持播报';
+    elements.stateHint.textContent = runtime.lastHostedScriptTitle
+      ? `当前文稿：${runtime.lastHostedScriptTitle}`
+      : stateConfig.hint;
+  } else {
+    elements.stateLabel.textContent = stateConfig.label;
+    elements.stateHint.textContent = stateConfig.hint;
+  }
   elements.stage.dataset.state = state;
   document.body.dataset.avatarState = state;
 
@@ -656,6 +908,9 @@ function appendMessage(role, text, options = {}) {
   }
   if (options.error) {
     article.classList.add('message-error');
+  }
+  if (options.hosting) {
+    article.classList.add('message-hosting');
   }
 
   if (role === 'assistant') {
@@ -693,6 +948,7 @@ function renderQuickQuestions() {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = question;
+    button.disabled = runtime.liveMode === 'hosting';
     button.addEventListener('click', () => {
       elements.questionInput.value = question;
       resizeComposer();
@@ -725,11 +981,22 @@ function estimatedSpeechDuration(text) {
   return Math.min(14_000, Math.max(2_200, text.length * 185 + punctuationPauses * 110));
 }
 
+function finishSpeechSequence(speechSequence) {
+  const finished = runtime.flow.finishSpeech(speechSequence);
+  if (finished && runtime.liveMode === 'hosting') {
+    elements.hostingScriptTitle.textContent = runtime.lastHostedScriptTitle
+      ? `播报完成：${runtime.lastHostedScriptTitle}`
+      : '本段主持词已播报完成';
+    elements.hostingScriptPreview.textContent = '等待后台选择下一段主持词。';
+  }
+  return finished;
+}
+
 function finishSpeechAfter(text, speechSequence) {
   runtime.speechTimer = setTimeout(() => {
     if (runtime.activeSpeechSequence === speechSequence) {
       runtime.activeSpeechSequence = null;
-      runtime.flow.finishSpeech(speechSequence);
+      finishSpeechSequence(speechSequence);
     }
   }, estimatedSpeechDuration(text));
 }
@@ -823,7 +1090,7 @@ function speakWithBrowser(text, speechSequence) {
     }
     runtime.activeSpeechSequence = null;
     runtime.speechUtterance = null;
-    runtime.flow.finishSpeech(speechSequence);
+    finishSpeechSequence(speechSequence);
   });
   utterance.addEventListener('error', () => {
     if (runtime.activeSpeechSequence !== speechSequence) {
@@ -873,6 +1140,9 @@ async function requestAnswer(question, signal) {
 }
 
 async function askQuestion(question) {
+  if (runtime.liveMode !== 'dialogue') {
+    return;
+  }
   runtime.requestController?.abort();
   stopSpeech();
   clearTimeout(runtime.previewTimer);
@@ -918,22 +1188,9 @@ async function askQuestion(question) {
   } finally {
     if (runtime.requestController === controller) {
       runtime.requestController = null;
-      elements.sendButton.disabled = false;
+      elements.sendButton.disabled = runtime.liveMode !== 'dialogue';
     }
   }
-}
-
-function startPresentation() {
-  runtime.voiceInput?.abort();
-  runtime.requestController?.abort();
-  runtime.requestController = null;
-  stopSpeech();
-  clearTimeout(runtime.previewTimer);
-  elements.sendButton.disabled = false;
-
-  const speechSequence = runtime.flow.beginPresentation();
-  appendMessage('assistant', runtime.config.presentationText);
-  speakText(runtime.config.presentationText, speechSequence);
 }
 
 function previewState(state) {
@@ -953,6 +1210,9 @@ function previewState(state) {
 }
 
 function prepareForVoiceInput() {
+  if (runtime.liveMode !== 'dialogue') {
+    return;
+  }
   runtime.requestController?.abort();
   stopSpeech();
   clearTimeout(runtime.previewTimer);
@@ -963,6 +1223,9 @@ function prepareForVoiceInput() {
 function bindEvents() {
   elements.questionForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (runtime.liveMode !== 'dialogue') {
+      return;
+    }
     runtime.voiceInput?.abort();
     const question = elements.questionInput.value.trim();
     if (!question) {
@@ -987,8 +1250,6 @@ function bindEvents() {
     runtime.voiceInput?.toggle();
   });
 
-  elements.presentationButton.addEventListener('click', startPresentation);
-
   elements.soundToggle.addEventListener('click', () => {
     runtime.soundEnabled = !runtime.soundEnabled;
     elements.soundToggle.setAttribute(
@@ -1002,7 +1263,7 @@ function bindEvents() {
     if (!runtime.soundEnabled && runtime.activeSpeechSequence !== null) {
       const activeSequence = runtime.activeSpeechSequence;
       stopSpeech();
-      runtime.flow.finishSpeech(activeSequence);
+      finishSpeechSequence(activeSequence);
     }
   });
 
@@ -1015,6 +1276,7 @@ function bindEvents() {
   window.addEventListener('beforeunload', () => {
     runtime.requestController?.abort();
     runtime.voiceInput?.abort();
+    runtime.liveEventSource?.close();
     stopSpeech();
   });
 }
@@ -1047,6 +1309,9 @@ async function start() {
   bindEvents();
   prepareSpeechVoices();
   resizeComposer();
+  updateInteractionAvailability();
+  connectLiveEvents();
+  await loadLiveState();
   await refreshHealth();
   setInterval(() => void refreshHealth(), 15_000);
 }

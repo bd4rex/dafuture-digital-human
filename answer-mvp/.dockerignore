@@ -1,5 +1,10 @@
 node_modules
 npm-debug.log
+host-scripts.json
+model-config.json
+admin-auth.json
+knowledge.json
+knowledge-files
 test
 README.md
 .DS_Store

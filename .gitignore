@@ -14,5 +14,6 @@ answer-mvp/.content-backup/
 answer-mvp/output/
 answer-mvp/model-config.json
 answer-mvp/admin-auth.json
+answer-mvp/host-scripts.json
 answer-mvp/knowledge.json
 answer-mvp/knowledge-files/
