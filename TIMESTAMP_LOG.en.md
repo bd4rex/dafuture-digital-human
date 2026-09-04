@@ -92,3 +92,8 @@
 
 - Task: simplify first-time administration-password setup for the demo by removing the server-loopback restriction and the requirement to preset `ADMIN_PASSWORD` for remote deployments.
 - Implementation: local, LAN, and Docker visitors now share the same flow: if no administration password exists, the first visit to the administration page can create one directly. After setup, server-side sessions still protect content, knowledge, and model settings. `ADMIN_PASSWORD` remains available only as an optional preset.
+
+## 2026-09-04 21:50 +0800
+
+- Task: further simplify first-time password setup for the demo by removing the same-origin restriction represented by “setup must originate from the current administration page.”
+- Implementation: while no administration password exists, the setup endpoint no longer checks the client address or page origin. After the password is created, sign-in and administration APIs retain their existing password, session, and same-origin protections.

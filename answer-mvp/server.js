@@ -1607,12 +1607,6 @@ export async function buildApp(options = {}) {
   );
 
   app.post('/api/admin/setup', async (request, reply) => {
-    if (!isSameOriginRequest(request)) {
-      return reply.code(403).send({
-        error: 'ADMIN_ORIGIN_REJECTED',
-        message: '首次设置只允许从当前管理页面发起。',
-      });
-    }
     if (
       !request.body ||
       typeof request.body !== 'object' ||

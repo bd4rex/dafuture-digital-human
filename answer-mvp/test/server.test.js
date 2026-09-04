@@ -438,7 +438,7 @@ test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {
   }
 });
 
-test('首次管理密码可从远程管理页设置，落盘仅保存加盐哈希', async (t) => {
+test('首次管理密码不限制访问地址或页面来源，落盘仅保存加盐哈希', async (t) => {
   const { app, adminAuthPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     adminPassword: '',
   });
@@ -456,19 +456,6 @@ test('首次管理密码可从远程管理页设置，落盘仅保存加盐哈�
   assert.equal(protectedResponse.statusCode, 401);
   assert.equal(protectedResponse.json().error, 'ADMIN_SETUP_REQUIRED');
 
-  const crossOriginSetup = await app.inject({
-    method: 'POST',
-    url: '/api/admin/setup',
-    remoteAddress: '192.0.2.10',
-    headers: {
-      host: 'demo.example.test',
-      origin: 'https://other.example.test',
-    },
-    payload: { password: 'safe-admin-password' },
-  });
-  assert.equal(crossOriginSetup.statusCode, 403);
-  assert.equal(crossOriginSetup.json().error, 'ADMIN_ORIGIN_REJECTED');
-
   const shortPassword = await app.inject({
     method: 'POST',
     url: '/api/admin/setup',
@@ -482,6 +469,10 @@ test('首次管理密码可从远程管理页设置，落盘仅保存加盐哈�
     method: 'POST',
     url: '/api/admin/setup',
     remoteAddress: '192.0.2.10',
+    headers: {
+      host: 'demo.example.test',
+      origin: 'https://other.example.test',
+    },
     payload: { password: 'safe-admin-password' },
   });
   assert.equal(setup.statusCode, 200);

@@ -27,7 +27,7 @@ The first visit to the administration page asks you to create an administration 
 ## Administrator Sign-In
 
 - Before sign-in, `/` serves only the password page. Manual content, knowledge-library, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
-- Without a preset password, the first visitor to the administration page can create it directly; local, LAN, and Docker access use the same flow.
+- Without a preset password, the first visitor can create it directly without an address or page-origin restriction; local, LAN, and Docker access use the same flow.
 - A password created through the page is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
 - Successful sign-in creates an HttpOnly, SameSite=Strict cookie. The session expires after eight hours by default and is invalidated by logout or service restart.
 - `ADMIN_API_KEY` remains available as an optional Bearer credential for automation. When `ADMIN_PASSWORD` is absent, it also acts as the web sign-in password.
