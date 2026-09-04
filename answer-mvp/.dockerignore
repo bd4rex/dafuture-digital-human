@@ -1,6 +1,8 @@
 node_modules
 npm-debug.log
 host-scripts.json
+operations.jsonl
+operations.jsonl.*
 model-config.json
 admin-auth.json
 knowledge.json

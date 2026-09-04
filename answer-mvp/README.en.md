@@ -73,6 +73,20 @@ The tabs at the top of the workbench also switch the live runtime mode:
 
 This MVP controls every frontend connected to one service instance as a single group; venue or device targeting is not yet included.
 
+### Operations Logs
+
+Select “Operations Logs” in the header to filter recent execution records by category, outcome, level, or keyword, or download retained JSONL for further troubleshooting. Recorded actions include:
+
+- Service initialization, listening, and shutdown.
+- Administration-password setup, successful/failed sign-in, rate limiting, and logout.
+- Manual-content saves, knowledge import/delete/download, model-setting saves, and connection tests.
+- Dialogue/Hosting mode switches, hosting-script saves, presentation dispatch, and stop commands.
+- Successful, rejected, and failed Q&A calls.
+
+Each entry includes time, action, request ID, route, actor type, client IP, HTTP status, duration, error code, and only the counts or identifiers needed for diagnosis. Passwords, cookies, Authorization values, API keys, system prompts, question/answer text, knowledge contents, and hosting-script text are explicitly excluded.
+
+Logs are written to `operations.jsonl` with `0600` permissions. The default retention is 5 MB per file and three files including the current file. The UI exposes only the filename, never the server's absolute path. A presentation log's `connectedClients` is the number of frontends connected when the server dispatched the command; it is not proof that a client speaker completed playback.
+
 The content area supports:
 
 - Creating, editing, copying, sorting, deleting, and searching knowledge entries.
@@ -206,9 +220,15 @@ The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-co
 - `POST /api/live-control/present`: authenticated broadcast by `scriptId`.
 - `POST /api/live-control/stop`: authenticated stop command for all connected frontends.
 
+### Operations Log Endpoints
+
+- `GET /api/ops-logs`: authenticated structured-log query with `limit`, `level`, `category`, `outcome`, and `search` filters.
+- `GET /api/ops-logs/download`: authenticated download of the retained JSONL log range.
+
 ### Health and Readiness Endpoints
 
 - `GET /health` always returns HTTP 200 and reports `ready`, the active content revision, and model state as `unconfigured`, `unverified`, `available`, or `unavailable`.
+- The health payload's `operations` field reports log-write status. A logging write failure marks overall status as `degraded` without interrupting an otherwise available Q&A or Hosting path.
 - `GET /ready` returns the same payload. Dialogue mode requires serviceable content and a configured model without a known connection failure. Hosting mode does not depend on the model, so serviceable content and live control are sufficient for HTTP 200. Docker uses this endpoint for its health check.
 - If a damaged content file leaves a previous valid version available, the service remains `ready: true` with overall state `degraded`. A known model-call failure changes it to `ready: false` and `not_ready`.
 
@@ -240,7 +260,7 @@ Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, 
 npm test
 ```
 
-The current 34 tests cover first-time password setup, sign-in/logout, salted hashes and same-origin enforcement, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
+The committed 37 tests cover first-time password setup, sign-in/logout, salted hashes and same-origin enforcement, operations-log persistence/filtering/download/redaction/rotation, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
 
 ## Docker
 
@@ -252,7 +272,7 @@ docker run --rm -p 8080:8080 \
   dafuture-answer-mvp
 ```
 
-Open the administration page after startup to create the password. The named volume persists manual content, hosting scripts, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
+Open the administration page after startup to create the password. The named volume persists manual content, hosting scripts, operations logs, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key or runtime logs to a public location.
 
 ## Environment Variables
 
@@ -266,6 +286,9 @@ Open the administration page after startup to create the password. The named vol
 | `KNOWLEDGE_FILES_DIR` | `knowledge-files` beside the index | Preserved imported originals |
 | `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time setup |
 | `LIVE_CONTROL_FILE` | `host-scripts.json` beside the content file | Persistent scripts; runtime mode and commands are not persisted |
+| `OPS_LOG_FILE` | `operations.jsonl` beside the content file | Persistent structured operations log; Docker uses `/data/operations.jsonl` |
+| `OPS_LOG_MAX_BYTES` | `5242880` | Maximum bytes per log file, from 32768 through 104857600 |
+| `OPS_LOG_MAX_FILES` | `3` | Retained files including the current file, from 1 through 10 |
 | `ADMIN_PASSWORD` | Not set | Optional preset web-administration password; otherwise the first visitor creates it in the page |
 | `ADMIN_SESSION_TTL_MS` | `28800000` | Session lifetime, from 15 minutes through seven days |
 | `ADMIN_COOKIE_SECURE` | Automatic | Set `true` behind an HTTPS gateway when the service cannot detect the original protocol |

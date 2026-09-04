@@ -18,6 +18,9 @@ const state = {
   hostSaving: false,
   liveBusy: false,
   workbenchMode: 'dialogue',
+  opsLogs: null,
+  opsLoading: false,
+  opsRefreshTimer: null,
   toastTimer: null,
 };
 
@@ -90,6 +93,25 @@ const elements = {
   modelTimeout: document.querySelector('#model-timeout'),
   modelSystemPrompt: document.querySelector('#model-system-prompt'),
   modelMessage: document.querySelector('#model-message'),
+  openOpsDialog: document.querySelector('#open-ops-dialog'),
+  opsDialog: document.querySelector('#ops-dialog'),
+  opsLogForm: document.querySelector('#ops-log-form'),
+  closeOpsDialog: document.querySelector('#close-ops-dialog'),
+  dismissOpsDialog: document.querySelector('#dismiss-ops-dialog'),
+  opsHealthState: document.querySelector('#ops-health-state'),
+  opsStoredCount: document.querySelector('#ops-stored-count'),
+  opsMatchedCount: document.querySelector('#ops-matched-count'),
+  opsStorageSize: document.querySelector('#ops-storage-size'),
+  opsCategory: document.querySelector('#ops-category'),
+  opsOutcome: document.querySelector('#ops-outcome'),
+  opsLevel: document.querySelector('#ops-level'),
+  opsLimit: document.querySelector('#ops-limit'),
+  opsSearch: document.querySelector('#ops-search'),
+  refreshOpsLogs: document.querySelector('#refresh-ops-logs'),
+  opsMessage: document.querySelector('#ops-message'),
+  opsLogList: document.querySelector('#ops-log-list'),
+  opsAutoRefresh: document.querySelector('#ops-auto-refresh'),
+  downloadOpsLogs: document.querySelector('#download-ops-logs'),
   logoutAdmin: document.querySelector('#logout-admin'),
   modeTabs: [...document.querySelectorAll('[data-workbench-mode]')],
   dialoguePanel: document.querySelector('#dialogue-panel'),
@@ -1030,6 +1052,208 @@ function formatDate(value) {
   }).format(date);
 }
 
+const OPS_CATEGORY_LABELS = Object.freeze({
+  system: '系统',
+  auth: '登录认证',
+  content: '手工内容',
+  knowledge: '知识库',
+  model: '模型',
+  live: '主持控制',
+  question: '数字人问答',
+});
+
+const OPS_OUTCOME_LABELS = Object.freeze({
+  success: '成功',
+  rejected: '被拒绝',
+  failure: '失败',
+});
+
+const OPS_ACTOR_LABELS = Object.freeze({
+  session: '管理会话',
+  'session-created': '新建会话',
+  'api-key': 'API 密钥',
+  anonymous: '未认证访问',
+});
+
+function renderOpsLogs(snapshot) {
+  state.opsLogs = snapshot;
+  elements.opsHealthState.textContent = snapshot.status?.ready
+    ? '正常'
+    : '写入异常';
+  elements.opsHealthState.classList.toggle(
+    'is-error',
+    !snapshot.status?.ready,
+  );
+  elements.opsStoredCount.textContent = String(snapshot.storedEntries ?? 0);
+  elements.opsMatchedCount.textContent = String(snapshot.totalMatched ?? 0);
+  elements.opsStorageSize.textContent = formatBytes(snapshot.totalBytes);
+  elements.opsStorageSize.title = `${snapshot.fileCount ?? 0} 个日志文件`;
+  elements.opsLogList.replaceChildren();
+
+  if (!Array.isArray(snapshot.entries) || snapshot.entries.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'ops-log-empty';
+    empty.textContent = '当前筛选条件下没有日志。';
+    elements.opsLogList.append(empty);
+    return;
+  }
+
+  const heading = document.createElement('div');
+  heading.className = 'ops-log-heading';
+  heading.setAttribute('role', 'row');
+  for (const label of ['时间', '动作', '结果', '响应与耗时']) {
+    const cell = document.createElement('span');
+    cell.setAttribute('role', 'columnheader');
+    cell.textContent = label;
+    heading.append(cell);
+  }
+  elements.opsLogList.append(heading);
+
+  for (const entry of snapshot.entries) {
+    const row = document.createElement('article');
+    row.className = `ops-log-entry outcome-${entry.outcome ?? 'success'}`;
+    row.setAttribute('role', 'row');
+
+    const time = document.createElement('time');
+    time.dateTime = entry.timestamp ?? '';
+    time.textContent = formatDate(entry.timestamp);
+
+    const event = document.createElement('div');
+    event.className = 'ops-event-copy';
+    const category = document.createElement('span');
+    category.className = `ops-category category-${entry.category ?? 'system'}`;
+    category.textContent = OPS_CATEGORY_LABELS[entry.category] ?? entry.category;
+    const summary = document.createElement('strong');
+    summary.textContent = entry.summary ?? entry.action ?? '未知动作';
+    const action = document.createElement('code');
+    action.textContent = entry.action ?? 'unknown';
+    event.append(category, summary, action);
+
+    const outcome = document.createElement('span');
+    outcome.className = `ops-outcome outcome-${entry.outcome ?? 'success'}`;
+    outcome.textContent = OPS_OUTCOME_LABELS[entry.outcome] ?? entry.outcome;
+
+    const execution = document.createElement('div');
+    execution.className = 'ops-execution';
+    const response = document.createElement('strong');
+    const statusCode = entry.request?.statusCode;
+    const durationMs = entry.request?.durationMs;
+    response.textContent = Number.isInteger(statusCode)
+      ? `HTTP ${statusCode}`
+      : '系统事件';
+    const duration = document.createElement('small');
+    duration.textContent = Number.isFinite(durationMs)
+      ? `${durationMs.toFixed(2)} ms`
+      : '无请求耗时';
+    execution.append(response, duration);
+
+    const diagnostic = document.createElement('details');
+    diagnostic.className = 'ops-diagnostic';
+    const diagnosticSummary = document.createElement('summary');
+    const errorCode = entry.details?.errorCode;
+    diagnosticSummary.textContent = errorCode
+      ? `诊断详情 · ${errorCode}`
+      : '诊断详情';
+    const diagnostics = document.createElement('pre');
+    diagnostics.textContent = JSON.stringify(
+      {
+        requestId: entry.request?.id || null,
+        route: entry.request?.route || null,
+        actor:
+          OPS_ACTOR_LABELS[entry.request?.actor] ??
+          entry.request?.actor ??
+          null,
+        clientIp: entry.request?.clientIp || null,
+        userAgent: entry.request?.userAgent || null,
+        details: entry.details ?? {},
+      },
+      null,
+      2,
+    );
+    diagnostic.append(diagnosticSummary, diagnostics);
+    row.append(time, event, outcome, execution, diagnostic);
+    elements.opsLogList.append(row);
+  }
+}
+
+function opsQueryParameters() {
+  const parameters = new URLSearchParams({ limit: elements.opsLimit.value });
+  for (const [name, element] of [
+    ['category', elements.opsCategory],
+    ['outcome', elements.opsOutcome],
+    ['level', elements.opsLevel],
+    ['search', elements.opsSearch],
+  ]) {
+    const value = element.value.trim();
+    if (value) {
+      parameters.set(name, value);
+    }
+  }
+  return parameters;
+}
+
+async function loadOpsLogs({ silent = false } = {}) {
+  if (state.opsLoading) {
+    return false;
+  }
+  state.opsLoading = true;
+  elements.refreshOpsLogs.disabled = true;
+  if (!silent) {
+    elements.refreshOpsLogs.textContent = '正在读取…';
+    elements.opsMessage.textContent = '正在读取服务器运维日志…';
+    elements.opsMessage.classList.remove('success');
+  }
+
+  try {
+    const snapshot = await requestJson(
+      `/api/ops-logs?${opsQueryParameters().toString()}`,
+    );
+    renderOpsLogs(snapshot);
+    elements.opsMessage.textContent = `已刷新 · ${formatDate(new Date().toISOString())}`;
+    elements.opsMessage.classList.add('success');
+    return true;
+  } catch (error) {
+    elements.opsMessage.textContent = error.message;
+    elements.opsMessage.classList.remove('success');
+    if (!silent) {
+      showToast(error.message, 'error');
+    }
+    return false;
+  } finally {
+    state.opsLoading = false;
+    elements.refreshOpsLogs.disabled = false;
+    elements.refreshOpsLogs.textContent = '刷新日志';
+  }
+}
+
+function stopOpsAutoRefresh() {
+  clearInterval(state.opsRefreshTimer);
+  state.opsRefreshTimer = null;
+}
+
+function updateOpsAutoRefresh() {
+  stopOpsAutoRefresh();
+  if (elements.opsAutoRefresh.checked && elements.opsDialog.open) {
+    state.opsRefreshTimer = setInterval(
+      () => void loadOpsLogs({ silent: true }),
+      5_000,
+    );
+  }
+}
+
+async function openOpsLogs() {
+  if (!elements.opsDialog.open) {
+    elements.opsDialog.showModal();
+  }
+  updateOpsAutoRefresh();
+  await loadOpsLogs();
+}
+
+function closeOpsLogs() {
+  stopOpsAutoRefresh();
+  elements.opsDialog.close();
+}
+
 function setKnowledgeSnapshot(snapshot) {
   state.knowledge = snapshot;
   elements.knowledgeCount.textContent = String(snapshot.documentCount ?? 0);
@@ -1598,6 +1822,27 @@ elements.cancelModelSettings.addEventListener('click', () => {
   elements.modelDialog.close();
 });
 elements.modelForm.addEventListener('submit', saveModelConfig);
+elements.openOpsDialog.addEventListener('click', () => {
+  void openOpsLogs();
+});
+elements.closeOpsDialog.addEventListener('click', closeOpsLogs);
+elements.dismissOpsDialog.addEventListener('click', closeOpsLogs);
+elements.opsLogForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void loadOpsLogs();
+});
+for (const filter of [
+  elements.opsCategory,
+  elements.opsOutcome,
+  elements.opsLevel,
+  elements.opsLimit,
+]) {
+  filter.addEventListener('change', () => {
+    void loadOpsLogs();
+  });
+}
+elements.opsAutoRefresh.addEventListener('change', updateOpsAutoRefresh);
+elements.opsDialog.addEventListener('close', stopOpsAutoRefresh);
 for (const tab of elements.modeTabs) {
   tab.addEventListener('click', () => {
     void switchWorkbenchMode(tab.dataset.workbenchMode);

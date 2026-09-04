@@ -28,6 +28,9 @@
         <button class="button button-secondary" id="open-model-dialog" type="button">
           模型设置
         </button>
+        <button class="button button-secondary" id="open-ops-dialog" type="button">
+          运维日志
+        </button>
         <button class="button button-quiet" id="logout-admin" type="button">
           退出登录
         </button>
@@ -424,6 +427,88 @@
           <button class="button button-quiet" id="cancel-model-settings" type="button">取消</button>
           <button class="button button-secondary" id="save-model-settings" type="submit" data-action="save">保存设置</button>
           <button class="button button-primary" id="test-model-settings" type="submit" data-action="test">保存并测试连接</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ops-dialog" class="dialog ops-dialog">
+      <form id="ops-log-form" novalidate>
+        <div class="dialog-heading">
+          <div>
+            <p class="section-kicker">OPERATIONS &amp; DIAGNOSTICS</p>
+            <h2>运维日志</h2>
+          </div>
+          <button class="dialog-close" id="close-ops-dialog" aria-label="关闭" type="button">×</button>
+        </div>
+        <p>查看关键动作的响应结果和执行耗时。系统不会记录密码、API Key、提问正文、回答正文或主持词正文。</p>
+
+        <section class="ops-summary" aria-label="日志摘要">
+          <div><strong id="ops-health-state">读取中</strong><span>日志状态</span></div>
+          <div><strong id="ops-stored-count">—</strong><span>当前保留</span></div>
+          <div><strong id="ops-matched-count">—</strong><span>符合筛选</span></div>
+          <div><strong id="ops-storage-size">—</strong><span>存储占用</span></div>
+        </section>
+
+        <div class="ops-filter-grid">
+          <label class="field">
+            <span class="field-label">类别</span>
+            <select id="ops-category">
+              <option value="">全部类别</option>
+              <option value="system">系统</option>
+              <option value="auth">登录认证</option>
+              <option value="content">手工内容</option>
+              <option value="knowledge">知识库</option>
+              <option value="model">模型</option>
+              <option value="live">主持控制</option>
+              <option value="question">数字人问答</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">执行结果</span>
+            <select id="ops-outcome">
+              <option value="">全部结果</option>
+              <option value="success">成功</option>
+              <option value="rejected">被拒绝</option>
+              <option value="failure">失败</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">级别</span>
+            <select id="ops-level">
+              <option value="">全部级别</option>
+              <option value="info">信息</option>
+              <option value="warning">警告</option>
+              <option value="error">错误</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">显示数量</span>
+            <select id="ops-limit">
+              <option value="100">最近 100 条</option>
+              <option value="200" selected>最近 200 条</option>
+              <option value="500">最近 500 条</option>
+              <option value="1000">最近 1000 条</option>
+            </select>
+          </label>
+          <label class="field ops-search-field">
+            <span class="field-label">搜索动作、请求编号或错误码</span>
+            <input id="ops-search" type="search" maxlength="120" placeholder="例如：hosting.present 或 MODEL_TIMEOUT">
+          </label>
+          <button class="button button-secondary ops-refresh" id="refresh-ops-logs" type="submit">刷新日志</button>
+        </div>
+
+        <p class="dialog-message" id="ops-message" aria-live="polite"></p>
+        <div class="ops-log-list" id="ops-log-list" role="table" aria-label="运维日志列表"></div>
+
+        <div class="dialog-actions ops-dialog-actions">
+          <label class="ops-auto-refresh">
+            <input id="ops-auto-refresh" type="checkbox">
+            <span>打开窗口时每 5 秒自动刷新</span>
+          </label>
+          <div>
+            <a class="button button-secondary" id="download-ops-logs" href="/api/ops-logs/download">下载 JSONL</a>
+            <button class="button button-quiet" id="dismiss-ops-dialog" type="button">关闭</button>
+          </div>
         </div>
       </form>
     </dialog>

@@ -11,6 +11,7 @@ import Fastify from 'fastify';
 import { AdminAuthStore } from './admin-auth.js';
 import { KnowledgeStore, KNOWLEDGE_LIMITS } from './knowledge-store.js';
 import { LiveControlStore } from './live-control-store.js';
+import { OPS_LOG_DEFAULTS, OpsLogStore } from './ops-log-store.js';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONTENT_PATH = path.join(MODULE_DIR, 'content.json');
@@ -1217,6 +1218,11 @@ export async function buildApp(options = {}) {
       process.env.LIVE_CONTROL_FILE ??
       path.join(path.dirname(contentPath), 'host-scripts.json'),
   );
+  const opsLogPath = path.resolve(
+    options.opsLogPath ??
+      process.env.OPS_LOG_FILE ??
+      path.join(path.dirname(contentPath), 'operations.jsonl'),
+  );
   const pollIntervalMs = integerSetting(
     options.pollIntervalMs ?? process.env.CONTENT_POLL_INTERVAL_MS,
     2_000,
@@ -1242,6 +1248,24 @@ export async function buildApp(options = {}) {
   const secureAdminCookies = optionalBooleanSetting(
     options.secureAdminCookies ?? process.env.ADMIN_COOKIE_SECURE,
     'ADMIN_COOKIE_SECURE',
+  );
+  const opsLogMaxFileBytes = integerSetting(
+    options.opsLogMaxFileBytes ?? process.env.OPS_LOG_MAX_BYTES,
+    OPS_LOG_DEFAULTS.maxFileBytes,
+    {
+      name: 'OPS_LOG_MAX_BYTES',
+      minimum: OPS_LOG_DEFAULTS.maxEntryBytes,
+      maximum: 100 * 1024 * 1024,
+    },
+  );
+  const opsLogMaxFiles = integerSetting(
+    options.opsLogMaxFiles ?? process.env.OPS_LOG_MAX_FILES,
+    OPS_LOG_DEFAULTS.maxFiles,
+    {
+      name: 'OPS_LOG_MAX_FILES',
+      minimum: 1,
+      maximum: 10,
+    },
   );
   const llmFetch = options.llmFetch ?? globalThis.fetch;
   if (typeof llmFetch !== 'function') {
@@ -1281,6 +1305,13 @@ export async function buildApp(options = {}) {
     logger: app.log,
   });
   await liveControlStore.start();
+  const opsLogStore = new OpsLogStore({
+    logPath: opsLogPath,
+    maxFileBytes: opsLogMaxFileBytes,
+    maxFiles: opsLogMaxFiles,
+    logger: app.log,
+  });
+  await opsLogStore.start();
   const adminAuthStore = new AdminAuthStore({
     configPath: adminAuthPath,
     presetPassword: adminPassword,
@@ -1289,6 +1320,19 @@ export async function buildApp(options = {}) {
     logger: app.log,
   });
   await adminAuthStore.start();
+  await opsLogStore.record({
+    category: 'system',
+    action: 'service.initialize',
+    outcome: 'success',
+    summary: '服务运行配置已加载',
+    details: {
+      version: '0.5.0',
+      contentCount: contentStore.items.length,
+      knowledgeDocumentCount: knowledgeStore.documents.length,
+      hostingScriptCount: liveControlStore.scripts.length,
+      modelConfigured: modelConfigStore.isConfigured(),
+    },
+  });
 
   const connectionTestMessages = Object.freeze([
     Object.freeze({
@@ -1341,6 +1385,7 @@ export async function buildApp(options = {}) {
       contentReady && (liveControlStore.mode === 'hosting' || modelReady);
     const degraded =
       Boolean(contentStore.lastReloadError) ||
+      !opsLogStore.publicStatus().ready ||
       (liveControlStore.mode === 'dialogue' &&
         modelConnection.status === 'unverified');
 
@@ -1372,6 +1417,7 @@ export async function buildApp(options = {}) {
         scriptCount: liveControlStore.scripts.length,
         revision: liveControlStore.revision,
       },
+      operations: opsLogStore.publicStatus(),
       model: {
         status: modelConnection.status,
         ready: modelReady,
@@ -1389,6 +1435,7 @@ export async function buildApp(options = {}) {
   app.decorate('modelConfigStore', modelConfigStore);
   app.decorate('knowledgeStore', knowledgeStore);
   app.decorate('liveControlStore', liveControlStore);
+  app.decorate('opsLogStore', opsLogStore);
   app.decorate('adminAuthStore', adminAuthStore);
   const liveClients = new Map();
   const writeLiveEvent = (response, event) => {
@@ -1404,7 +1451,21 @@ export async function buildApp(options = {}) {
       writeLiveEvent(response, event);
     }
   };
+  const recordOpsSafely = async (entry) => {
+    try {
+      await opsLogStore.record(entry);
+    } catch {
+      // OpsLogStore already emits a sanitized process-log error.
+    }
+  };
   app.addHook('preClose', async () => {
+    await recordOpsSafely({
+      category: 'system',
+      action: 'service.stop',
+      outcome: 'success',
+      summary: '服务正在停止',
+    });
+    await opsLogStore.flush();
     for (const [response, heartbeat] of liveClients) {
       clearInterval(heartbeat);
       response.end();
@@ -1414,7 +1475,8 @@ export async function buildApp(options = {}) {
   app.addHook('onClose', async () => {
     contentStore.stop();
   });
-  app.addHook('onRequest', async (_request, reply) => {
+  app.addHook('onRequest', async (request, reply) => {
+    request.opsStartedAt = process.hrtime.bigint();
     reply.header('Access-Control-Allow-Origin', corsOrigin);
     reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     reply.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
@@ -1469,6 +1531,12 @@ export async function buildApp(options = {}) {
   app.options('/api/live-control/stop', async (_request, reply) =>
     reply.code(204).send(),
   );
+  app.options('/api/ops-logs', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/ops-logs/download', async (_request, reply) =>
+    reply.code(204).send(),
+  );
 
   const hasBearerAccess = (request) =>
     Boolean(
@@ -1502,6 +1570,109 @@ export async function buildApp(options = {}) {
         : '管理会话已失效，请重新登录。',
     });
   };
+
+  const operationDefinitions = new Map([
+    ['POST /api/admin/setup', { category: 'auth', action: 'admin.setup', label: '设置管理密码' }],
+    ['POST /api/admin/login', { category: 'auth', action: 'admin.login', label: '管理员登录' }],
+    ['POST /api/admin/logout', { category: 'auth', action: 'admin.logout', label: '管理员退出' }],
+    ['PUT /api/content', { category: 'content', action: 'content.save', label: '保存手工内容' }],
+    ['POST /api/knowledge/import', { category: 'knowledge', action: 'knowledge.import', label: '导入知识文件' }],
+    ['DELETE /api/knowledge/:id', { category: 'knowledge', action: 'knowledge.delete', label: '删除知识文件' }],
+    ['GET /api/knowledge/:id/download', { category: 'knowledge', action: 'knowledge.download', label: '下载知识原文件' }],
+    ['PUT /api/model-config', { category: 'model', action: 'model.save', label: '保存模型设置' }],
+    ['POST /api/model-config/test', { category: 'model', action: 'model.test', label: '测试模型连接' }],
+    ['PUT /api/live-control', { category: 'live', action: 'hosting.scripts.save', label: '保存主持词' }],
+    ['POST /api/live-control/mode', { category: 'live', action: 'live.mode.switch', label: '切换运行模式' }],
+    ['POST /api/live-control/present', { category: 'live', action: 'hosting.present', label: '下发主持播报' }],
+    ['POST /api/live-control/stop', { category: 'live', action: 'hosting.stop', label: '停止主持播报' }],
+    ['POST /answer', { category: 'question', action: 'question.answer', label: '执行数字人问答' }],
+    ['GET /api/ops-logs/download', { category: 'system', action: 'operations.download', label: '下载运维日志' }],
+  ]);
+  const operationForRequest = (request) =>
+    operationDefinitions.get(
+      `${request.method} ${request.routeOptions?.url ?? ''}`,
+    );
+
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (
+      operationForRequest(request) &&
+      reply.statusCode >= 400 &&
+      (typeof payload === 'string' || Buffer.isBuffer(payload)) &&
+      Buffer.byteLength(payload) <= 16 * 1024
+    ) {
+      try {
+        const parsed = JSON.parse(String(payload));
+        if (
+          typeof parsed?.error === 'string' &&
+          /^[A-Z][A-Z0-9_]{0,79}$/.test(parsed.error)
+        ) {
+          request.opsErrorCode = parsed.error;
+        }
+      } catch {
+        // Only a structured error code is needed; response bodies are never logged.
+      }
+    }
+    return payload;
+  });
+
+  app.addHook('onResponse', async (request, reply) => {
+    const definition = operationForRequest(request);
+    if (!definition) {
+      return;
+    }
+
+    const statusCode = reply.statusCode;
+    const outcome =
+      statusCode < 400
+        ? 'success'
+        : statusCode < 500
+          ? 'rejected'
+          : 'failure';
+    const suffix =
+      outcome === 'success'
+        ? '成功'
+        : outcome === 'rejected'
+          ? '被拒绝'
+          : '失败';
+    const startedAt = request.opsStartedAt;
+    const durationMs =
+      typeof startedAt === 'bigint'
+        ? Math.round(
+            (Number(process.hrtime.bigint() - startedAt) / 1_000_000) * 100,
+          ) / 100
+        : null;
+    const actor =
+      request.opsActor ??
+      request.adminAccessMode ??
+      (hasBearerAccess(request)
+        ? 'api-key'
+        : adminAuthStore.hasValidSession(request)
+          ? 'session'
+          : 'anonymous');
+
+    await recordOpsSafely({
+      category: definition.category,
+      action: definition.action,
+      outcome,
+      summary: `${definition.label}${suffix}`,
+      request: {
+        id: String(request.id),
+        method: request.method,
+        route: request.routeOptions?.url ?? '',
+        statusCode,
+        durationMs,
+        actor,
+        clientIp: request.ip,
+        userAgent: request.headers['user-agent'] ?? '',
+      },
+      details: {
+        ...(request.opsDetails ?? {}),
+        ...(request.opsErrorCode
+          ? { errorCode: request.opsErrorCode }
+          : {}),
+      },
+    });
+  });
 
   const loginAttempts = new Map();
   const loginAttemptWindowMs = 5 * 60 * 1_000;
@@ -1727,6 +1898,7 @@ export async function buildApp(options = {}) {
 
     await adminAuthStore.setup(request.body.password);
     const token = adminAuthStore.createSession();
+    request.opsActor = 'session-created';
     return reply
       .header('Cache-Control', 'no-store')
       .header('Set-Cookie', adminAuthStore.cookie(token, request))
@@ -1760,6 +1932,9 @@ export async function buildApp(options = {}) {
     }
 
     const attempt = loginAttempt(request.ip);
+    request.opsDetails = {
+      failedAttemptsInWindow: attempt.count,
+    };
     if (attempt.count >= loginAttemptLimit) {
       const retryAfter = Math.max(
         1,
@@ -1777,6 +1952,10 @@ export async function buildApp(options = {}) {
     const valid = await adminAuthStore.verify(request.body.password);
     if (!valid) {
       attempt.count += 1;
+      request.opsDetails = {
+        failedAttemptsInWindow: attempt.count,
+        remainingAttempts: Math.max(0, loginAttemptLimit - attempt.count),
+      };
       return reply.code(401).send({
         error: 'ADMIN_LOGIN_FAILED',
         message: '管理密码不正确。',
@@ -1785,6 +1964,8 @@ export async function buildApp(options = {}) {
 
     loginAttempts.delete(request.ip);
     const token = adminAuthStore.createSession();
+    request.opsActor = 'session-created';
+    request.opsDetails = { failedAttemptsInWindow: 0 };
     return reply
       .header('Cache-Control', 'no-store')
       .header('Set-Cookie', adminAuthStore.cookie(token, request))
@@ -1792,6 +1973,11 @@ export async function buildApp(options = {}) {
   });
 
   app.post('/api/admin/logout', async (request, reply) => {
+    request.opsActor = hasBearerAccess(request)
+      ? 'api-key'
+      : adminAuthStore.hasValidSession(request)
+        ? 'session'
+        : 'anonymous';
     adminAuthStore.destroySession(request);
     return reply
       .header('Cache-Control', 'no-store')
@@ -1801,7 +1987,7 @@ export async function buildApp(options = {}) {
 
   app.get('/api', async () => ({
     service: '大未来数字人问答 MVP',
-    version: '0.4.0',
+    version: '0.5.0',
     contentCount: contentStore.items.length,
     knowledgeDocumentCount: knowledgeStore.documents.length,
     knowledgeChunkCount: knowledgeStore.chunkCount(),
@@ -1816,6 +2002,8 @@ export async function buildApp(options = {}) {
       liveState: 'GET /api/live/state',
       liveEvents: 'GET /api/live/events',
       liveControl: 'GET,PUT /api/live-control',
+      operations: 'GET /api/ops-logs',
+      operationsDownload: 'GET /api/ops-logs/download',
       health: 'GET /health',
       readiness: 'GET /ready',
     },
@@ -1827,6 +2015,77 @@ export async function buildApp(options = {}) {
     const health = buildHealthPayload();
     return reply.code(health.ready ? 200 : 503).send(health);
   });
+
+  app.get(
+    '/api/ops-logs',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const query = request.query ?? {};
+      const allowedKeys = new Set([
+        'limit',
+        'level',
+        'category',
+        'outcome',
+        'search',
+      ]);
+      const validLevel = ['', 'info', 'warning', 'error'];
+      const validCategory = [
+        '',
+        'system',
+        'auth',
+        'content',
+        'knowledge',
+        'model',
+        'live',
+        'question',
+      ];
+      const validOutcome = ['', 'success', 'rejected', 'failure'];
+      if (
+        !query ||
+        typeof query !== 'object' ||
+        Array.isArray(query) ||
+        Object.keys(query).some((key) => !allowedKeys.has(key)) ||
+        Object.values(query).some((value) => typeof value !== 'string') ||
+        (query.limit !== undefined &&
+          (!/^\d{1,4}$/.test(query.limit) ||
+            Number(query.limit) < 1 ||
+            Number(query.limit) > OPS_LOG_DEFAULTS.maxQueryLimit)) ||
+        !validLevel.includes(query.level ?? '') ||
+        !validCategory.includes(query.category ?? '') ||
+        !validOutcome.includes(query.outcome ?? '') ||
+        [...(query.search ?? '')].length > 120
+      ) {
+        return reply.code(400).send({
+          error: 'OPS_LOG_QUERY_INVALID',
+          message: '运维日志筛选参数无效。',
+        });
+      }
+
+      reply.header('Cache-Control', 'private, no-store');
+      return {
+        ...(await opsLogStore.query(query)),
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
+
+  app.get(
+    '/api/ops-logs/download',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const exported = await opsLogStore.exportJsonl();
+      request.opsDetails = { exportedBytes: Buffer.byteLength(exported) };
+      const date = new Date().toISOString().slice(0, 10);
+      return reply
+        .header('Cache-Control', 'private, no-store')
+        .header(
+          'Content-Disposition',
+          `attachment; filename="operations-${date}.jsonl"`,
+        )
+        .type('application/x-ndjson; charset=utf-8')
+        .send(exported);
+    },
+  );
 
   app.get(
     '/api/live-control',
@@ -1859,8 +2118,16 @@ export async function buildApp(options = {}) {
           message: '请求体必须只包含 revision 字符串和 scripts 数组。',
         });
       }
+      const snapshot = await liveControlStore.saveScripts(
+        body.scripts,
+        body.revision,
+      );
+      request.opsDetails = {
+        scriptCount: snapshot.scripts.length,
+        revision: snapshot.revision.slice(0, 12),
+      };
       return {
-        ...(await liveControlStore.saveScripts(body.scripts, body.revision)),
+        ...snapshot,
         connectedClients: liveClients.size,
         accessMode: request.adminAccessMode,
       };
@@ -1888,6 +2155,11 @@ export async function buildApp(options = {}) {
       if (event) {
         broadcastLiveEvent(event);
       }
+      request.opsDetails = {
+        requestedMode: body.mode,
+        changed: Boolean(event),
+        connectedClients: liveClients.size,
+      };
       return {
         ...liveControlStore.publicSnapshot({
           connectedClients: liveClients.size,
@@ -1916,6 +2188,11 @@ export async function buildApp(options = {}) {
       }
       const event = liveControlStore.present(body.scriptId);
       broadcastLiveEvent(event);
+      request.opsDetails = {
+        scriptId: event.script.id,
+        characterCount: [...event.script.text].length,
+        connectedClients: liveClients.size,
+      };
       return {
         ...liveControlStore.publicSnapshot({
           connectedClients: liveClients.size,
@@ -1945,6 +2222,10 @@ export async function buildApp(options = {}) {
       }
       const event = liveControlStore.stop();
       broadcastLiveEvent(event);
+      request.opsDetails = {
+        mode: event.mode,
+        connectedClients: liveClients.size,
+      };
       return {
         ...liveControlStore.publicSnapshot({
           connectedClients: liveClients.size,
@@ -1985,6 +2266,10 @@ export async function buildApp(options = {}) {
       }
 
       const saved = await contentStore.save(body.items, body.revision);
+      request.opsDetails = {
+        itemCount: saved.items.length,
+        revision: saved.revision.slice(0, 12),
+      };
       return {
         ...saved,
         accessMode: request.adminAccessMode,
@@ -2050,8 +2335,18 @@ export async function buildApp(options = {}) {
         }
       }
 
+      const result = await knowledgeStore.importFiles(files, mode);
+      request.opsDetails = {
+        mode,
+        receivedFileCount: files.length,
+        importedCount: result.imported.length,
+        skippedCount: result.skipped.length,
+        totalBytes,
+        documentCount: result.documents.length,
+        chunkCount: result.chunkCount,
+      };
       return {
-        ...(await knowledgeStore.importFiles(files, mode)),
+        ...result,
         accessMode: request.adminAccessMode,
       };
     },
@@ -2083,6 +2378,10 @@ export async function buildApp(options = {}) {
         /['()*]/g,
         (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
       );
+      request.opsDetails = {
+        documentId: document.id,
+        bytes: fileStat.size,
+      };
       return reply
         .header('Cache-Control', 'private, no-store')
         .header(
@@ -2098,10 +2397,18 @@ export async function buildApp(options = {}) {
   app.delete(
     '/api/knowledge/:id',
     { preHandler: requireAdminAccess },
-    async (request) => ({
-      ...(await knowledgeStore.deleteDocument(request.params.id)),
-      accessMode: request.adminAccessMode,
-    }),
+    async (request) => {
+      const result = await knowledgeStore.deleteDocument(request.params.id);
+      request.opsDetails = {
+        documentId: request.params.id,
+        documentCount: result.documents.length,
+        chunkCount: result.chunkCount,
+      };
+      return {
+        ...result,
+        accessMode: request.adminAccessMode,
+      };
+    },
   );
 
   app.get(
@@ -2116,29 +2423,44 @@ export async function buildApp(options = {}) {
   app.put(
     '/api/model-config',
     { preHandler: requireAdminAccess },
-    async (request) => ({
-      ...(await modelConfigStore.save(request.body, {
+    async (request) => {
+      const result = await modelConfigStore.save(request.body, {
         validate: async (candidateConfig) => {
-          const result = await callTrackedModel(
+          const connectionResult = await callTrackedModel(
             candidateConfig,
             connectionTestMessages,
             { trackConnection: false },
           );
           return {
             ok: true,
-            model: result.model,
-            latencyMs: result.latencyMs,
+            model: connectionResult.model,
+            latencyMs: connectionResult.latencyMs,
           };
         },
-      })),
-      accessMode: request.adminAccessMode,
-    }),
+      });
+      request.opsDetails = {
+        provider: result.provider,
+        model: result.model,
+        configured: result.configured,
+        answerMode: result.answerMode,
+        connectionStatus: result.connection?.status,
+        connectionTested: Boolean(result.connectionTest),
+      };
+      return {
+        ...result,
+        accessMode: request.adminAccessMode,
+      };
+    },
   );
 
   app.post(
     '/api/model-config/test',
     { preHandler: requireAdminAccess },
-    async (_request, reply) => {
+    async (request, reply) => {
+      request.opsDetails = {
+        configured: modelConfigStore.isConfigured(),
+        model: modelConfigStore.config.model || null,
+      };
       if (!modelConfigStore.isConfigured()) {
         return reply.code(503).send({
           error: 'MODEL_NOT_CONFIGURED',
@@ -2150,6 +2472,11 @@ export async function buildApp(options = {}) {
         modelConfigStore.config,
         connectionTestMessages,
       );
+      request.opsDetails = {
+        configured: true,
+        model: result.model,
+        latencyMs: result.latencyMs,
+      };
       return {
         ok: true,
         model: result.model,
@@ -2179,6 +2506,10 @@ export async function buildApp(options = {}) {
       },
     },
     async (request, reply) => {
+      request.opsDetails = {
+        mode: liveControlStore.mode,
+        questionCharacters: [...request.body.question].length,
+      };
       if (liveControlStore.mode === 'hosting') {
         return reply.code(409).send({
           error: 'HOSTING_MODE_ACTIVE',
@@ -2211,6 +2542,19 @@ export async function buildApp(options = {}) {
           context.text,
         ),
       );
+      request.opsDetails = {
+        mode: liveControlStore.mode,
+        questionCharacters: [...request.body.question].length,
+        contextCount: context.contextIds.length,
+        matchedCount: context.matchedIds.length,
+        importedContextCount: context.contextIds.filter((id) =>
+          id.includes('-chunk-'),
+        ).length,
+        answerStatus: result.answerStatus,
+        answerStatusSource: result.answerStatusSource,
+        model: result.model,
+        latencyMs: result.latencyMs,
+      };
 
       return {
         answered: result.answerStatus === 'answered',
@@ -2325,6 +2669,8 @@ export async function buildApp(options = {}) {
               ? '知识库操作失败，请检查存储目录的写入权限。'
               : request.routeOptions?.url?.startsWith('/api/live-control')
                 ? '主持控制操作失败，请检查主持词文件的写入权限。'
+                : request.routeOptions?.url?.startsWith('/api/ops-logs')
+                  ? '运维日志读取失败，请检查日志文件所在目录的权限。'
           : '服务暂时无法处理该请求。',
     });
   });
@@ -2350,6 +2696,15 @@ if (isMainModule()) {
     });
     const host = process.env.HOST ?? '127.0.0.1';
     await app.listen({ port, host });
+    await app.opsLogStore
+      .record({
+        category: 'system',
+        action: 'service.listen',
+        outcome: 'success',
+        summary: '服务监听已启动',
+        details: { host, port },
+      })
+      .catch(() => {});
 
     const shutdown = async (signal) => {
       app.log.info({ signal }, '正在停止服务');

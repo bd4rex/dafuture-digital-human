@@ -12,6 +12,7 @@ import {
 } from '../server.js';
 import { KnowledgeStore, parseKnowledgeFile } from '../knowledge-store.js';
 import { LiveControlStore } from '../live-control-store.js';
+import { OpsLogStore, sanitizeOpsDetails } from '../ops-log-store.js';
 
 const ORIGINAL_CONTENT = [
   {
@@ -82,6 +83,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
   const contentPath = path.join(temporaryDirectory, 'content.json');
   const modelConfigPath = path.join(temporaryDirectory, 'model-config.json');
   const liveControlPath = path.join(temporaryDirectory, 'host-scripts.json');
+  const opsLogPath = path.join(temporaryDirectory, 'operations.jsonl');
   await writeFile(contentPath, JSON.stringify(content), 'utf8');
   const defaultMock = createMockLlm();
 
@@ -93,6 +95,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
     modelConfigPath,
     adminAuthPath: path.join(temporaryDirectory, 'admin-auth.json'),
     liveControlPath,
+    opsLogPath,
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
     adminPassword,
@@ -129,6 +132,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
     adminAuthPath: path.join(temporaryDirectory, 'admin-auth.json'),
     liveControlPath,
+    opsLogPath,
     adminCookie,
   };
 }
@@ -240,6 +244,7 @@ test('管理页面需登录，登录后提供内容、知识库与模型设置',
   assert.match(response.body, /对话模式/);
   assert.match(response.body, /主持模式/);
   assert.match(response.body, /保存并播报到前台/);
+  assert.match(response.body, /运维日志/);
   assert.doesNotMatch(response.body, /资料来源/);
 });
 
@@ -483,6 +488,197 @@ test('实时事件流向已连接前台发送模式、主持词和停止指令',
   });
 });
 
+test('运维日志持久记录动作结果和耗时，同时不保存敏感正文', async (t) => {
+  const { app, opsLogPath } = await createTestApp(t);
+  const initial = (
+    await adminInject(app, { method: 'GET', url: '/api/live-control' })
+  ).json();
+  const privateScriptText = 'PRIVATE_HOST_TEXT_MUST_NOT_ENTER_OPERATIONS_LOG';
+  const wrongPassword = 'WRONG_PASSWORD_MUST_NOT_ENTER_OPERATIONS_LOG';
+  const privateQuestion = 'PRIVATE_QUESTION_MUST_NOT_ENTER_OPERATIONS_LOG';
+
+  const saved = await adminInject(app, {
+    method: 'PUT',
+    url: '/api/live-control',
+    payload: {
+      revision: initial.revision,
+      scripts: [
+        {
+          id: 'ops-log-script',
+          title: '日志验证段落',
+          text: privateScriptText,
+        },
+      ],
+    },
+  });
+  assert.equal(saved.statusCode, 200, saved.body);
+
+  const presented = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/present',
+    payload: { scriptId: 'ops-log-script' },
+  });
+  assert.equal(presented.statusCode, 200, presented.body);
+
+  const dialogueMode = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/mode',
+    payload: { mode: 'dialogue' },
+  });
+  assert.equal(dialogueMode.statusCode, 200, dialogueMode.body);
+
+  const rejectedLogin = await app.inject({
+    method: 'POST',
+    url: '/api/admin/login',
+    payload: { password: wrongPassword },
+  });
+  assert.equal(rejectedLogin.statusCode, 401);
+
+  const failedQuestion = await app.inject({
+    method: 'POST',
+    url: '/answer',
+    payload: { question: privateQuestion },
+  });
+  assert.equal(failedQuestion.statusCode, 503);
+  assert.equal(failedQuestion.json().error, 'MODEL_NOT_CONFIGURED');
+
+  const response = await adminInject(app, {
+    method: 'GET',
+    url: '/api/ops-logs?limit=100',
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.headers['cache-control'], 'private, no-store');
+  const snapshot = response.json();
+  assert.equal(snapshot.status.ready, true);
+  assert.ok(snapshot.storedEntries >= 4);
+  assert.equal(snapshot.invalidLines, 0);
+
+  const presentLog = snapshot.entries.find(
+    (entry) => entry.action === 'hosting.present',
+  );
+  assert.ok(presentLog);
+  assert.equal(presentLog.outcome, 'success');
+  assert.equal(presentLog.request.statusCode, 200);
+  assert.equal(presentLog.request.actor, 'session');
+  assert.equal(presentLog.request.route, '/api/live-control/present');
+  assert.ok(presentLog.request.durationMs >= 0);
+  assert.equal(presentLog.details.scriptId, 'ops-log-script');
+  assert.equal(
+    presentLog.details.characterCount,
+    [...privateScriptText].length,
+  );
+
+  const loginLog = snapshot.entries.find(
+    (entry) =>
+      entry.action === 'admin.login' && entry.outcome === 'rejected',
+  );
+  assert.ok(loginLog);
+  assert.equal(loginLog.details.errorCode, 'ADMIN_LOGIN_FAILED');
+  assert.equal(loginLog.request.statusCode, 401);
+
+  const questionLog = snapshot.entries.find(
+    (entry) => entry.action === 'question.answer',
+  );
+  assert.ok(questionLog);
+  assert.equal(questionLog.details.errorCode, 'MODEL_NOT_CONFIGURED');
+  assert.equal(
+    questionLog.details.questionCharacters,
+    [...privateQuestion].length,
+  );
+
+  const liveOnly = (
+    await adminInject(app, {
+      method: 'GET',
+      url: '/api/ops-logs?category=live&outcome=success&limit=20',
+    })
+  ).json();
+  assert.ok(liveOnly.entries.length >= 2);
+  assert.ok(
+    liveOnly.entries.every(
+      (entry) => entry.category === 'live' && entry.outcome === 'success',
+    ),
+  );
+
+  const invalidQuery = await adminInject(app, {
+    method: 'GET',
+    url: '/api/ops-logs?limit=5000',
+  });
+  assert.equal(invalidQuery.statusCode, 400);
+  assert.equal(invalidQuery.json().error, 'OPS_LOG_QUERY_INVALID');
+
+  const download = await adminInject(app, {
+    method: 'GET',
+    url: '/api/ops-logs/download',
+  });
+  assert.equal(download.statusCode, 200);
+  assert.match(download.headers['content-type'], /application\/x-ndjson/);
+  assert.match(download.headers['content-disposition'], /operations-\d{4}-\d{2}-\d{2}\.jsonl/);
+
+  const source = await readFile(opsLogPath, 'utf8');
+  assert.doesNotMatch(source, new RegExp(privateScriptText));
+  assert.doesNotMatch(source, new RegExp(wrongPassword));
+  assert.doesNotMatch(source, new RegExp(privateQuestion));
+  assert.equal((await stat(opsLogPath)).mode & 0o777, 0o600);
+
+  const reloaded = new OpsLogStore({
+    logPath: opsLogPath,
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  await reloaded.start();
+  const persisted = await reloaded.query({ limit: 100 });
+  assert.ok(
+    persisted.entries.some((entry) => entry.action === 'hosting.present'),
+  );
+});
+
+test('运维日志脱敏嵌套密钥并按文件大小自动轮转', async (t) => {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), 'answer-mvp-ops-log-test-'),
+  );
+  t.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
+  const logPath = path.join(temporaryDirectory, 'operations.jsonl');
+  const store = new OpsLogStore({
+    logPath,
+    maxFileBytes: 32 * 1024,
+    maxFiles: 2,
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  await store.start();
+
+  const sanitized = sanitizeOpsDetails({
+    password: 'private-password',
+    apiKey: 'private-api-key',
+    contentCount: 4,
+    nested: { token: 'private-token', answerStatus: 'answered' },
+  });
+  assert.equal(sanitized.password, '[REDACTED]');
+  assert.equal(sanitized.apiKey, '[REDACTED]');
+  assert.equal(sanitized.contentCount, 4);
+  assert.equal(sanitized.nested.token, '[REDACTED]');
+  assert.equal(sanitized.nested.answerStatus, 'answered');
+
+  for (let index = 0; index < 140; index += 1) {
+    await store.record({
+      category: 'system',
+      action: `rotation.${index}`,
+      outcome: 'success',
+      summary: `轮转测试 ${index}`,
+      details: {
+        diagnostic: 'x'.repeat(300),
+        password: 'never-write-this-password',
+      },
+    });
+  }
+
+  assert.ok((await stat(`${logPath}.1`)).size > 0);
+  assert.ok((await stat(logPath)).size <= 32 * 1024);
+  assert.doesNotMatch(await readFile(logPath, 'utf8'), /never-write-this-password/);
+  const snapshot = await store.query({ limit: 10 });
+  assert.equal(snapshot.invalidLines, 0);
+  assert.equal(snapshot.entries[0].action, 'rotation.139');
+  assert.equal(snapshot.fileCount, 2);
+});
+
 test('访客快捷问题随内容工作台保存结果和版本号更新', async (t) => {
   const { app } = await createTestApp(t);
   const loaded = (
@@ -608,6 +804,7 @@ test('内容、模型和主持控制接口均要求登录且拒绝跨源会话',
     '/api/knowledge',
     '/api/model-config',
     '/api/live-control',
+    '/api/ops-logs',
   ]) {
     const unauthenticated = await app.inject({ method: 'GET', url });
     assert.equal(unauthenticated.statusCode, 401);
@@ -636,6 +833,7 @@ test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {
     '/api/knowledge',
     '/api/model-config',
     '/api/live-control',
+    '/api/ops-logs',
   ]) {
     assert.equal((await app.inject({ method: 'GET', url })).statusCode, 401);
     const authorized = await app.inject({
