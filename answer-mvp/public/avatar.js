@@ -77,7 +77,6 @@ const runtime = {
   flow: null,
   videoSwitcher: null,
   requestController: null,
-  speechTimer: null,
   speechUtterance: null,
   activeSpeechSequence: null,
   preferredSpeechVoice: null,
@@ -627,7 +626,7 @@ function applyConfig(config) {
   setMediaNote();
   renderQuickQuestions();
   if (runtime.flow) {
-    updateStateUI(runtime.flow.state);
+    updateStateUI(runtime.flow.state, runtime.flow.reason);
   }
 }
 
@@ -700,7 +699,7 @@ function setLiveMode(mode, reason = 'live-mode-changed') {
   }
   updateInteractionAvailability();
   if (runtime.flow) {
-    updateStateUI(runtime.flow.state);
+    updateStateUI(runtime.flow.state, runtime.flow.reason);
   }
   return changed;
 }
@@ -865,7 +864,7 @@ async function refreshHealth() {
   }
 }
 
-function updateStateUI(state) {
+function updateStateUI(state, reason = runtime.flow?.reason) {
   const stateConfig = runtime.config.states[state] ?? DEFAULT_CONFIG.states[state];
   if (runtime.liveMode === 'hosting' && state === 'idle') {
     elements.stateLabel.textContent = '主持模式';
@@ -875,6 +874,9 @@ function updateStateUI(state) {
     elements.stateHint.textContent = runtime.lastHostedScriptTitle
       ? `当前文稿：${runtime.lastHostedScriptTitle}`
       : stateConfig.hint;
+  } else if (state === 'thinking' && reason === 'audio-preparing') {
+    elements.stateLabel.textContent = '正在准备语音';
+    elements.stateHint.textContent = '答案已生成，等待音频开始播放';
   } else {
     elements.stateLabel.textContent = stateConfig.label;
     elements.stateHint.textContent = stateConfig.hint;
@@ -967,18 +969,11 @@ function resizeComposer() {
 }
 
 function stopSpeech() {
-  clearTimeout(runtime.speechTimer);
-  runtime.speechTimer = null;
   runtime.speechUtterance = null;
   runtime.activeSpeechSequence = null;
   if ('speechSynthesis' in window) {
     window.speechSynthesis.cancel();
   }
-}
-
-function estimatedSpeechDuration(text) {
-  const punctuationPauses = (text.match(/[，。！？；：,.!?;:]/g) ?? []).length;
-  return Math.min(14_000, Math.max(2_200, text.length * 185 + punctuationPauses * 110));
 }
 
 function finishSpeechSequence(speechSequence) {
@@ -992,13 +987,10 @@ function finishSpeechSequence(speechSequence) {
   return finished;
 }
 
-function finishSpeechAfter(text, speechSequence) {
-  runtime.speechTimer = setTimeout(() => {
-    if (runtime.activeSpeechSequence === speechSequence) {
-      runtime.activeSpeechSequence = null;
-      finishSpeechSequence(speechSequence);
-    }
-  }, estimatedSpeechDuration(text));
+function startSpeechSequence(speechSequence) {
+  // Server-backed providers should call this from the audio `playing` event,
+  // not when answer text or synthesized bytes merely become available.
+  return runtime.flow.startSpeech(speechSequence);
 }
 
 function normalizedVoiceName(value) {
@@ -1064,12 +1056,18 @@ function speakWithBrowser(text, speechSequence) {
   stopSpeech();
   runtime.activeSpeechSequence = speechSequence;
 
+  if (!runtime.soundEnabled) {
+    runtime.activeSpeechSequence = null;
+    finishSpeechSequence(speechSequence);
+    return;
+  }
+
   if (
-    !runtime.soundEnabled ||
     !('speechSynthesis' in window) ||
     !('SpeechSynthesisUtterance' in window)
   ) {
-    finishSpeechAfter(text, speechSequence);
+    runtime.activeSpeechSequence = null;
+    finishSpeechSequence(speechSequence);
     return;
   }
 
@@ -1084,6 +1082,12 @@ function speakWithBrowser(text, speechSequence) {
   utterance.pitch = speechNumber('pitch', DEFAULT_CONFIG.speech.pitch, 0.8, 1.2);
   utterance.volume = 1;
 
+  utterance.addEventListener('start', () => {
+    if (runtime.activeSpeechSequence !== speechSequence) {
+      return;
+    }
+    startSpeechSequence(speechSequence);
+  });
   utterance.addEventListener('end', () => {
     if (runtime.activeSpeechSequence !== speechSequence) {
       return;
@@ -1096,16 +1100,18 @@ function speakWithBrowser(text, speechSequence) {
     if (runtime.activeSpeechSequence !== speechSequence) {
       return;
     }
+    runtime.activeSpeechSequence = null;
     runtime.speechUtterance = null;
-    finishSpeechAfter(text, speechSequence);
+    finishSpeechSequence(speechSequence);
   });
 
   runtime.speechUtterance = utterance;
   try {
     window.speechSynthesis.speak(utterance);
   } catch {
+    runtime.activeSpeechSequence = null;
     runtime.speechUtterance = null;
-    finishSpeechAfter(text, speechSequence);
+    finishSpeechSequence(speechSequence);
   }
 }
 
@@ -1290,7 +1296,9 @@ async function start() {
     onFallback: (fallback) => setMediaNote({ fallback }),
   });
   runtime.videoSwitcher.configure(runtime.config.states);
-  runtime.flow = new AvatarFlow(({ state }) => updateStateUI(state));
+  runtime.flow = new AvatarFlow(({ state, reason }) =>
+    updateStateUI(state, reason),
+  );
   runtime.flow.announce();
   runtime.voiceInput = createVoiceInputController({
     button: elements.voiceInputButton,

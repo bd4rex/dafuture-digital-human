@@ -15,11 +15,13 @@ export class AvatarFlow {
   constructor(onStateChange = () => {}) {
     this.onStateChange = onStateChange;
     this.state = 'idle';
+    this.reason = 'ready';
     this.requestSequence = 0;
     this.speechSequence = 0;
   }
 
   announce(reason = 'ready') {
+    this.reason = reason;
     this.onStateChange({ state: this.state, reason });
   }
 
@@ -29,6 +31,7 @@ export class AvatarFlow {
     }
 
     this.state = state;
+    this.reason = reason;
     this.onStateChange({ state, reason });
   }
 
@@ -45,8 +48,20 @@ export class AvatarFlow {
     }
 
     this.speechSequence += 1;
-    this.transition('speaking', 'answer-ready');
+    this.transition('thinking', 'audio-preparing');
     return this.speechSequence;
+  }
+
+  startSpeech(speechSequence) {
+    if (
+      speechSequence !== this.speechSequence ||
+      this.state !== 'thinking'
+    ) {
+      return false;
+    }
+
+    this.transition('speaking', 'audio-playing');
+    return true;
   }
 
   failQuestion(requestSequence) {
