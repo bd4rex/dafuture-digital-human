@@ -1906,12 +1906,6 @@ export async function buildApp(options = {}) {
   });
 
   app.post('/api/admin/login', async (request, reply) => {
-    if (!isSameOriginRequest(request)) {
-      return reply.code(403).send({
-        error: 'ADMIN_ORIGIN_REJECTED',
-        message: '管理登录只允许从同源页面发起。',
-      });
-    }
     if (adminAuthStore.setupRequired()) {
       return reply.code(409).send({
         error: 'ADMIN_SETUP_REQUIRED',

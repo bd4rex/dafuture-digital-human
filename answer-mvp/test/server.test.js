@@ -846,7 +846,7 @@ test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {
   }
 });
 
-test('首次管理密码不限制访问地址或页面来源，落盘仅保存加盐哈希', async (t) => {
+test('首次设置和管理登录不限制页面来源，落盘仅保存加盐哈希', async (t) => {
   const { app, adminAuthPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     adminPassword: '',
   });
@@ -920,6 +920,10 @@ test('首次管理密码不限制访问地址或页面来源，落盘仅保存�
   const wrongLogin = await app.inject({
     method: 'POST',
     url: '/api/admin/login',
+    headers: {
+      host: 'demo.example.test',
+      origin: 'https://other.example.test',
+    },
     payload: { password: 'wrong-password' },
   });
   assert.equal(wrongLogin.statusCode, 401);
@@ -927,6 +931,10 @@ test('首次管理密码不限制访问地址或页面来源，落盘仅保存�
   const correctLogin = await app.inject({
     method: 'POST',
     url: '/api/admin/login',
+    headers: {
+      host: 'demo.example.test',
+      origin: 'https://other.example.test',
+    },
     payload: { password: 'safe-admin-password' },
   });
   assert.equal(correctLogin.statusCode, 200);

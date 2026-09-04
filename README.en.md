@@ -42,7 +42,7 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
 - Diagnose sign-in, content, knowledge, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
-- Protect administration with server-verified passwords, HttpOnly sessions, and same-origin checks, while retaining optional Bearer access for automation.
+- Allow sign-in from any page origin, then protect administration with server-verified passwords, HttpOnly sessions, and same-origin checks on session-backed management APIs; optional Bearer access remains available for automation.
 - Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
 - Sanitize upstream model errors so API keys and upstream details are not exposed to the frontend.
 

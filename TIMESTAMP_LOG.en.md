@@ -116,3 +116,9 @@
 - Administration UI: the header now opens an Operations Log view with category, outcome, severity, keyword, and count filters; it shows storage health, retained/matched counts, bytes, request details, and error codes. Optional five-second refresh and full JSONL download are included.
 - Verification: all 37 automated tests passed and `npm audit --omit=dev` reported zero vulnerabilities. An isolated real-browser run covered desktop and 390×844 mobile layouts, hosting action records, failed-question error codes, category/keyword filters, and expanded diagnostics with zero console errors or warnings. Dedicated question and hosting-text markers were absent from the raw log, whose mode was confirmed as `0600`.
 - Limitation: the local Docker daemon was unavailable, so no image was built. The Dockerfile, named-volume path, and ignore rules already include operations-log persistence.
+
+## 2026-09-05 06:35 +0800
+
+- Task: remove the “administration sign-in must originate from a same-origin page” restriction for the demo workflow.
+- Implementation: `POST /api/admin/login` no longer compares the request `Origin` with the server `Host`; first-time password setup and later sign-in can both originate from a different page origin. Password verification, sign-in rate limiting, HttpOnly/SameSite sessions, and same-origin enforcement on post-login management APIs remain in place.
+- Verification: automated coverage uses mismatched `Origin` and `Host` values to confirm that an incorrect password still returns 401, the correct password signs in and issues a secure session, and cross-origin management requests after sign-in remain rejected.
