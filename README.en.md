@@ -7,10 +7,10 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 ## Current Status
 
 - Application version: `0.3.0`.
-- The content workbench, model configuration, Q&A API, four-state transparent-video frontend, and browser speech playback are implemented.
+- The content workbench, model configuration, Q&A API, four-state transparent-video frontend, browser Mandarin voice input, and male speech playback are implemented.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
 - No real model configuration is included. Users must enter their own settings in the workbench after the first launch.
-- This is an MVP prototype. It has not been deployed to a production server, and real-person avatar media and production-grade TTS still need to be integrated.
+- This is an MVP prototype and has not been deployed to a production server. Production male-avatar media is integrated, and browser playback now prefers Mandarin male voices; cross-device production-grade TTS still needs to be integrated.
 
 ## Quick Start
 

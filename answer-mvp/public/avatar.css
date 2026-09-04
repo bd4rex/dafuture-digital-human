@@ -861,8 +861,8 @@ button.quiet-action {
   padding: 9px 9px 9px 18px;
   border: 1px solid rgba(181, 216, 222, 0.22);
   border-radius: 20px;
-  grid-template-columns: minmax(0, 1fr) 48px;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 44px 48px;
+  gap: 8px;
   align-items: end;
   background: rgba(3, 18, 28, 0.62);
   transition: border-color 180ms ease, box-shadow 180ms ease;
@@ -889,6 +889,51 @@ button.quiet-action {
 
 .question-composer textarea::placeholder {
   color: #708994;
+}
+
+.voice-input-button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 2px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(181, 216, 222, 0.22);
+  border-radius: 14px;
+  color: #a8bec4;
+  background: rgba(16, 48, 61, 0.72);
+  transition: border-color 160ms ease, color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.voice-input-button:hover {
+  border-color: rgba(97, 225, 204, 0.52);
+  color: var(--mint);
+  transform: translateY(-1px);
+}
+
+.voice-input-button svg {
+  width: 21px;
+  height: 21px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.voice-input-button.is-listening {
+  border-color: rgba(97, 225, 204, 0.78);
+  color: #052029;
+  background: var(--mint);
+  box-shadow: 0 0 0 5px rgba(97, 225, 204, 0.1);
+  animation: listening-pulse 1.35s ease-in-out infinite;
+}
+
+.voice-input-button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.7);
+  opacity: 0.42;
 }
 
 .send-button {
@@ -1002,6 +1047,11 @@ button.quiet-action {
 @keyframes voice-pulse {
   0%, 100% { opacity: 0.28; transform: scale(0.92); }
   50% { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes listening-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(97, 225, 204, 0.08); }
+  50% { box-shadow: 0 0 0 9px rgba(97, 225, 204, 0.16); }
 }
 
 @keyframes mouth-talk {

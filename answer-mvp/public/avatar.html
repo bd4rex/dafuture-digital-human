@@ -208,11 +208,24 @@
             placeholder="输入你想问的问题…"
             required
           ></textarea>
+          <button
+            class="voice-input-button"
+            id="voice-input-button"
+            type="button"
+            aria-label="开始语音输入"
+            aria-pressed="false"
+            title="语音提问"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 14.5a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5a3.5 3.5 0 0 0 3.5 3.5Z"></path>
+              <path d="M5.8 10.8a6.2 6.2 0 0 0 12.4 0M12 17v3M9.2 20h5.6"></path>
+            </svg>
+          </button>
           <button class="send-button" id="send-button" type="submit" aria-label="发送问题">
             <span aria-hidden="true">↗</span>
           </button>
         </form>
-        <p class="composer-hint">按 Enter 发送，Shift + Enter 换行 · 回答由后台配置的大语言模型生成</p>
+        <p class="composer-hint" id="composer-hint" aria-live="polite">按 Enter 发送，或点击麦克风直接提问 · 回答由后台配置的大语言模型生成</p>
 
         <section class="preview-panel" id="preview-panel" hidden aria-label="姿态预览">
           <span>姿态预览</span>

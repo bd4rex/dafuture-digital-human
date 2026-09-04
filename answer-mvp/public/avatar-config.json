@@ -4,6 +4,32 @@
   "characterName": "小未",
   "welcomeText": "你好，我是大未来数字助手小未。我会结合后台内容，通过大语言模型为你生成回答。",
   "presentationText": "大家好，欢迎来到大未来数字人问答体验。我会结合后台配置的内容，通过大语言模型生成自然、可播报的回答。",
+  "speech": {
+    "provider": "browser",
+    "gender": "male",
+    "preferredVoiceNames": [
+      "Reed",
+      "Eddy",
+      "Rocko",
+      "Yunxi",
+      "云希",
+      "Yunjian",
+      "云健",
+      "Yunyang",
+      "云扬",
+      "Kangkang",
+      "康康",
+      "Grandpa"
+    ],
+    "rate": 0.98,
+    "pitch": 0.98
+  },
+  "speechInput": {
+    "provider": "browser",
+    "language": "zh-CN",
+    "interimResults": true,
+    "autoSubmit": true
+  },
   "states": {
     "idle": {
       "label": "随时可以开始",

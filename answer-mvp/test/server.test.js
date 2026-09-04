@@ -151,6 +151,18 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.equal(configResponse.statusCode, 200);
   const avatarConfig = configResponse.json();
   assert.equal(avatarConfig.mediaMode, 'production');
+  assert.equal(avatarConfig.speech.provider, 'browser');
+  assert.equal(avatarConfig.speech.gender, 'male');
+  assert.equal(avatarConfig.speech.preferredVoiceNames[0], 'Reed');
+  assert.equal(avatarConfig.speech.rate, 0.98);
+  assert.equal(avatarConfig.speech.pitch, 0.98);
+  assert.deepEqual(avatarConfig.speechInput, {
+    provider: 'browser',
+    language: 'zh-CN',
+    interimResults: true,
+    autoSubmit: true,
+  });
+  assert.match(pageResponse.body, /id="voice-input-button"/);
   assert.deepEqual(Object.keys(avatarConfig.states), [
     'idle',
     'thinking',

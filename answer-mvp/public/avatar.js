@@ -4,6 +4,32 @@ const DEFAULT_CONFIG = Object.freeze({
   characterName: '小未',
   welcomeText: '你好，我是大未来数字助手。请问有什么可以帮你？',
   presentationText: '大家好，欢迎来到大未来数字人问答体验。',
+  speech: {
+    provider: 'browser',
+    gender: 'male',
+    preferredVoiceNames: [
+      'Reed',
+      'Eddy',
+      'Rocko',
+      'Yunxi',
+      '云希',
+      'Yunjian',
+      '云健',
+      'Yunyang',
+      '云扬',
+      'Kangkang',
+      '康康',
+      'Grandpa',
+    ],
+    rate: 0.98,
+    pitch: 0.98,
+  },
+  speechInput: {
+    provider: 'browser',
+    language: 'zh-CN',
+    interimResults: true,
+    autoSubmit: true,
+  },
   quickQuestions: [],
   contentRevision: null,
   states: {
@@ -13,6 +39,9 @@ const DEFAULT_CONFIG = Object.freeze({
     presenting: { label: '主持模式', hint: '正在进行开场介绍', sources: [] },
   },
 });
+
+const DEFAULT_COMPOSER_HINT =
+  '按 Enter 发送，或点击麦克风直接提问 · 回答由后台配置的大语言模型生成';
 
 const elements = {
   servicePill: document.querySelector('#service-pill'),
@@ -30,7 +59,9 @@ const elements = {
   quickQuestions: document.querySelector('#quick-question-list'),
   questionForm: document.querySelector('#question-form'),
   questionInput: document.querySelector('#question-input'),
+  voiceInputButton: document.querySelector('#voice-input-button'),
   sendButton: document.querySelector('#send-button'),
+  composerHint: document.querySelector('#composer-hint'),
   presentationButton: document.querySelector('#presentation-button'),
   previewPanel: document.querySelector('#preview-panel'),
 };
@@ -43,6 +74,8 @@ const runtime = {
   speechTimer: null,
   speechUtterance: null,
   activeSpeechSequence: null,
+  preferredSpeechVoice: null,
+  voiceInput: null,
   previewTimer: null,
   soundEnabled: true,
 };
@@ -298,6 +331,219 @@ class AvatarVideoSwitcher {
   }
 }
 
+class BrowserVoiceInput {
+  constructor({ button, input, form, hint, config, onBeforeStart, onTranscript }) {
+    this.button = button;
+    this.input = input;
+    this.form = form;
+    this.hint = hint;
+    this.onBeforeStart = onBeforeStart;
+    this.onTranscript = onTranscript;
+    this.Recognition =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+    this.recognition = null;
+    this.config = DEFAULT_CONFIG.speechInput;
+    this.active = false;
+    this.cancelled = false;
+    this.pendingSubmit = false;
+    this.baseText = '';
+    this.errorMessage = '';
+    this.messageTimer = null;
+
+    if (!this.Recognition) {
+      this.setState('unsupported');
+      return;
+    }
+
+    this.recognition = new this.Recognition();
+    this.recognition.onstart = () => this.handleStart();
+    this.recognition.onresult = (event) => this.handleResult(event);
+    this.recognition.onerror = (event) => this.handleError(event);
+    this.recognition.onend = () => this.handleEnd();
+    this.configure(config);
+    this.setState('idle');
+  }
+
+  configure(config) {
+    this.config = {
+      ...DEFAULT_CONFIG.speechInput,
+      ...(config && typeof config === 'object' ? config : {}),
+    };
+    if (!this.recognition) {
+      return;
+    }
+    this.recognition.lang = this.config.language || 'zh-CN';
+    this.recognition.continuous = false;
+    this.recognition.interimResults = this.config.interimResults !== false;
+    this.recognition.maxAlternatives = 1;
+  }
+
+  toggle() {
+    if (this.active) {
+      this.stop();
+      return;
+    }
+    this.start();
+  }
+
+  start() {
+    if (!this.recognition) {
+      this.setState('unsupported');
+      return;
+    }
+
+    clearTimeout(this.messageTimer);
+    this.cancelled = false;
+    this.pendingSubmit = false;
+    this.errorMessage = '';
+    this.baseText = this.input.value.trim();
+    this.active = true;
+    this.onBeforeStart?.();
+    this.setState('starting');
+
+    try {
+      this.recognition.start();
+    } catch {
+      this.active = false;
+      this.setState('error', '麦克风暂时无法启动，请稍后重试');
+    }
+  }
+
+  stop() {
+    if (!this.recognition || !this.active) {
+      return;
+    }
+    this.pendingSubmit =
+      this.config.autoSubmit !== false &&
+      this.input.value.trim() !== '' &&
+      this.input.value.trim() !== this.baseText;
+    try {
+      this.recognition.stop();
+    } catch {
+      this.active = false;
+      this.setState('idle');
+    }
+  }
+
+  abort() {
+    this.pendingSubmit = false;
+    this.cancelled = true;
+    if (this.recognition && this.active) {
+      try {
+        this.recognition.abort();
+      } catch {
+        // Recognition may already be ending; the UI still needs to reset.
+      }
+    }
+    this.active = false;
+    this.setState('idle');
+  }
+
+  handleStart() {
+    this.active = true;
+    this.setState('listening');
+  }
+
+  handleResult(event) {
+    const finalSegments = [];
+    const interimSegments = [];
+    for (let index = 0; index < event.results.length; index += 1) {
+      const result = event.results[index];
+      const transcript = result?.[0]?.transcript?.trim();
+      if (!transcript) {
+        continue;
+      }
+      (result.isFinal ? finalSegments : interimSegments).push(transcript);
+    }
+
+    const finalTranscript = finalSegments.join('');
+    const liveTranscript = [...finalSegments, ...interimSegments].join('');
+    this.input.value = [this.baseText, liveTranscript].filter(Boolean).join(' ');
+    this.onTranscript?.();
+
+    if (finalTranscript && this.config.autoSubmit !== false) {
+      this.pendingSubmit = true;
+      try {
+        this.recognition.stop();
+      } catch {
+        // A single-result recognizer may already be stopping itself.
+      }
+    }
+  }
+
+  handleError(event) {
+    if (event.error === 'aborted' && this.cancelled) {
+      return;
+    }
+
+    this.pendingSubmit = false;
+    this.errorMessage = {
+      'not-allowed': '麦克风权限未开启，请在浏览器地址栏允许后重试',
+      'service-not-allowed': '浏览器未允许使用语音识别服务',
+      'audio-capture': '未检测到可用的麦克风',
+      'no-speech': '没有听清，请再说一次',
+      network: '语音识别网络服务暂不可用',
+    }[event.error] ?? '语音识别失败，请再试一次';
+    this.setState('error', this.errorMessage);
+  }
+
+  handleEnd() {
+    const shouldSubmit =
+      !this.cancelled &&
+      !this.errorMessage &&
+      this.pendingSubmit &&
+      Boolean(this.input.value.trim());
+    this.active = false;
+    this.pendingSubmit = false;
+    this.setState(this.errorMessage ? 'error' : 'idle', this.errorMessage);
+
+    if (shouldSubmit) {
+      setTimeout(() => this.form.requestSubmit(), 0);
+    }
+  }
+
+  setState(state, message = '') {
+    clearTimeout(this.messageTimer);
+    const listening = state === 'starting' || state === 'listening';
+    const unsupported = state === 'unsupported';
+    const label = unsupported
+      ? '当前浏览器不支持语音输入'
+      : listening
+        ? '停止并发送语音'
+        : '开始语音输入';
+
+    this.button.disabled = unsupported;
+    this.button.classList.toggle('is-listening', listening);
+    this.button.dataset.state = state;
+    this.button.setAttribute('aria-pressed', String(listening));
+    this.button.setAttribute('aria-label', label);
+    this.button.title = label;
+
+    this.hint.textContent =
+      message ||
+      ({
+        starting: '正在打开麦克风…',
+        listening: '正在聆听，说完后会自动发送；再次点击可提前结束',
+        unsupported: '当前浏览器不支持语音输入，仍可使用文字提问',
+      }[state] ?? DEFAULT_COMPOSER_HINT);
+
+    if (state === 'error') {
+      this.messageTimer = setTimeout(() => this.setState('idle'), 4_500);
+    }
+  }
+}
+
+const voiceInputProviders = Object.freeze({
+  browser: (options) => new BrowserVoiceInput(options),
+});
+
+function createVoiceInputController(options) {
+  const providerName =
+    options.config?.provider ?? DEFAULT_CONFIG.speechInput.provider;
+  const factory = voiceInputProviders[providerName] ?? voiceInputProviders.browser;
+  return factory(options);
+}
+
 async function loadConfig(fallback = DEFAULT_CONFIG) {
   try {
     const response = await fetch('/avatar-config.json', {
@@ -325,6 +571,7 @@ function applyConfig(config) {
   elements.avatarName.textContent = config.characterName;
   elements.welcomeMessage.textContent = config.welcomeText;
   runtime.videoSwitcher?.configure(config.states);
+  runtime.voiceInput?.configure(config.speechInput);
   setMediaNote();
   renderQuickQuestions();
   if (runtime.flow) {
@@ -487,16 +734,66 @@ function finishSpeechAfter(text, speechSequence) {
   }, estimatedSpeechDuration(text));
 }
 
+function normalizedVoiceName(value) {
+  return String(value ?? '').normalize('NFKC').toLowerCase();
+}
+
 function preferredChineseVoice() {
   const voices = window.speechSynthesis?.getVoices?.() ?? [];
-  return (
-    voices.find((voice) => /^zh-CN$/i.test(voice.lang)) ??
-    voices.find((voice) => /^zh/i.test(voice.lang)) ??
-    null
+  const chineseVoices = voices.filter((voice) => /^zh(?:[-_]|$)/i.test(voice.lang));
+  const mainlandVoices = chineseVoices.filter(
+    (voice) => voice.lang.replace('_', '-').toLowerCase() === 'zh-cn',
+  );
+  const candidates = [
+    ...mainlandVoices,
+    ...chineseVoices.filter((voice) => !mainlandVoices.includes(voice)),
+  ];
+  const configuredPreferences = runtime.config.speech?.preferredVoiceNames;
+  const preferences =
+    Array.isArray(configuredPreferences) && configuredPreferences.length > 0
+      ? configuredPreferences
+      : DEFAULT_CONFIG.speech.preferredVoiceNames;
+
+  for (const preference of preferences) {
+    const normalizedPreference = normalizedVoiceName(preference);
+    if (!normalizedPreference) {
+      continue;
+    }
+    const matchedVoice = candidates.find((voice) =>
+      normalizedVoiceName(voice.name).includes(normalizedPreference),
+    );
+    if (matchedVoice) {
+      return matchedVoice;
+    }
+  }
+
+  return candidates.find((voice) => voice.localService) ?? candidates[0] ?? null;
+}
+
+function prepareSpeechVoices() {
+  if (!('speechSynthesis' in window)) {
+    return;
+  }
+
+  const refreshPreferredVoice = () => {
+    runtime.preferredSpeechVoice = preferredChineseVoice();
+  };
+  refreshPreferredVoice();
+  window.speechSynthesis.addEventListener?.(
+    'voiceschanged',
+    refreshPreferredVoice,
   );
 }
 
-function speakText(text, speechSequence) {
+function speechNumber(name, fallback, minimum, maximum) {
+  const configured = Number(runtime.config.speech?.[name]);
+  if (!Number.isFinite(configured)) {
+    return fallback;
+  }
+  return Math.min(maximum, Math.max(minimum, configured));
+}
+
+function speakWithBrowser(text, speechSequence) {
   stopSpeech();
   runtime.activeSpeechSequence = speechSequence;
 
@@ -510,13 +807,14 @@ function speakText(text, speechSequence) {
   }
 
   const utterance = new SpeechSynthesisUtterance(text);
-  const voice = preferredChineseVoice();
+  const voice = runtime.preferredSpeechVoice ?? preferredChineseVoice();
   if (voice) {
     utterance.voice = voice;
+    runtime.preferredSpeechVoice = voice;
   }
   utterance.lang = voice?.lang ?? 'zh-CN';
-  utterance.rate = 0.96;
-  utterance.pitch = 1;
+  utterance.rate = speechNumber('rate', DEFAULT_CONFIG.speech.rate, 0.75, 1.25);
+  utterance.pitch = speechNumber('pitch', DEFAULT_CONFIG.speech.pitch, 0.8, 1.2);
   utterance.volume = 1;
 
   utterance.addEventListener('end', () => {
@@ -542,6 +840,18 @@ function speakText(text, speechSequence) {
     runtime.speechUtterance = null;
     finishSpeechAfter(text, speechSequence);
   }
+}
+
+const speechProviders = Object.freeze({
+  browser: speakWithBrowser,
+});
+
+function speakText(text, speechSequence) {
+  runtime.voiceInput?.abort();
+  const providerName =
+    runtime.config.speech?.provider ?? DEFAULT_CONFIG.speech.provider;
+  const provider = speechProviders[providerName] ?? speechProviders.browser;
+  provider(text, speechSequence);
 }
 
 async function requestAnswer(question, signal) {
@@ -614,6 +924,7 @@ async function askQuestion(question) {
 }
 
 function startPresentation() {
+  runtime.voiceInput?.abort();
   runtime.requestController?.abort();
   runtime.requestController = null;
   stopSpeech();
@@ -626,6 +937,7 @@ function startPresentation() {
 }
 
 function previewState(state) {
+  runtime.voiceInput?.abort();
   runtime.requestController?.abort();
   runtime.requestController = null;
   stopSpeech();
@@ -640,9 +952,18 @@ function previewState(state) {
   }
 }
 
+function prepareForVoiceInput() {
+  runtime.requestController?.abort();
+  stopSpeech();
+  clearTimeout(runtime.previewTimer);
+  elements.sendButton.disabled = false;
+  runtime.flow?.reset('voice-input-started');
+}
+
 function bindEvents() {
   elements.questionForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    runtime.voiceInput?.abort();
     const question = elements.questionInput.value.trim();
     if (!question) {
       elements.questionInput.focus();
@@ -660,6 +981,10 @@ function bindEvents() {
       event.preventDefault();
       elements.questionForm.requestSubmit();
     }
+  });
+
+  elements.voiceInputButton.addEventListener('click', () => {
+    runtime.voiceInput?.toggle();
   });
 
   elements.presentationButton.addEventListener('click', startPresentation);
@@ -689,6 +1014,7 @@ function bindEvents() {
 
   window.addEventListener('beforeunload', () => {
     runtime.requestController?.abort();
+    runtime.voiceInput?.abort();
     stopSpeech();
   });
 }
@@ -704,12 +1030,22 @@ async function start() {
   runtime.videoSwitcher.configure(runtime.config.states);
   runtime.flow = new AvatarFlow(({ state }) => updateStateUI(state));
   runtime.flow.announce();
+  runtime.voiceInput = createVoiceInputController({
+    button: elements.voiceInputButton,
+    input: elements.questionInput,
+    form: elements.questionForm,
+    hint: elements.composerHint,
+    config: runtime.config.speechInput,
+    onBeforeStart: prepareForVoiceInput,
+    onTranscript: resizeComposer,
+  });
 
   if (new URLSearchParams(window.location.search).get('preview') === '1') {
     elements.previewPanel.hidden = false;
   }
 
   bindEvents();
+  prepareSpeechVoices();
   resizeComposer();
   await refreshHealth();
   setInterval(() => void refreshHealth(), 15_000);

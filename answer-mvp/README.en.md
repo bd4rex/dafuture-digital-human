@@ -82,7 +82,19 @@ Speech finished -> idle
 “Host Introduction” selected -> presenting -> speech finished -> idle
 ```
 
-Speech currently uses the browser's local speech synthesis. If video is unavailable or the user has enabled reduced motion, the page falls back to lightweight animation while Q&A remains available.
+Speech currently uses the browser's local speech synthesis and prefers Mandarin male voices. macOS/Chrome selects `Reed` first, followed by `Eddy`, `Rocko`, and common Windows male voices such as Yunxi, Yunjian, Yunyang, and Kangkang. Rate and pitch are configured in the `speech` section of `public/avatar-config.json`. If none of these voices is installed, the browser falls back to an available local Chinese voice; use server-side TTS in production when every device must use the same voice. If video is unavailable or the user has enabled reduced motion, the page falls back to lightweight animation while Q&A remains available.
+
+In addition to typing, visitors can click the microphone beside the composer and speak a question. The current implementation uses browser `SpeechRecognition`/`webkitSpeechRecognition` for a single Mandarin turn, displays interim text, and automatically submits the final transcript. The visitor must initiate recording and grant microphone access on first use. Unsupported browsers or denied permission receive a clear message while retaining the complete text-input path. Production should use HTTPS to avoid repeated microphone permission prompts.
+
+### External Speech Provider Boundary
+
+Both `speech.provider` and `speechInput.provider` in `public/avatar-config.json` currently use `browser`. Playback and recognition are separated behind provider entry points so a future external model can retain these boundaries:
+
+- An ASR provider converts one recording into the final question text, then reuses the existing form submission and Q&A flow.
+- A TTS provider converts `speechText` into playable audio and drives the existing avatar state machine through start, end, and cancellation events.
+- Third-party API keys remain server-side; the browser calls only same-origin proxy endpoints and never holds provider credentials.
+- Browser recognition may use a vendor-operated remote service and must not be assumed to run locally. Choose and configure production ASR according to privacy requirements before handling sensitive student or visitor information.
+- The browser provider can remain as a fallback, while identical voice-and-text output can be cached by hash to reduce latency and provider cost.
 
 Preview all four states manually:
 
