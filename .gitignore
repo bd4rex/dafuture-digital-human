@@ -10,6 +10,7 @@ __pycache__/
 *.key
 *.p12
 answer-mvp/node_modules/
+answer-mvp/.playwright-cli/
 answer-mvp/.content-backup/
 answer-mvp/output/
 answer-mvp/model-config.json
