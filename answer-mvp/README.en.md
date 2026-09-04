@@ -2,13 +2,13 @@
 
 # “Da Future” LLM Digital Human Q&A MVP
 
-This is a runnable local prototype. A visitor asks a question through the digital-human frontend, the service sends the question and the business knowledge maintained in `content.json` to a configured large language model, and the generated text is displayed and spoken by the browser.
+This is a runnable local prototype. A visitor asks a question through the digital-human frontend, the service retrieves relevant manual Q&A entries and imported knowledge files for a configured large language model, and the generated text is displayed and spoken by the browser.
 
 The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, and system prompt can all be configured in the web workbench.
 
 ## Local Setup
 
-Node.js 20 or later is required.
+Node.js 20.16–20.x, or Node.js 22.3 and later, is required.
 
 ```bash
 npm install
@@ -21,6 +21,16 @@ By default, the service listens only on `http://127.0.0.1:8080`:
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
 - `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
+
+The first local visit to the administration page asks you to create an administration password of at least eight characters.
+
+## Administrator Sign-In
+
+- Before sign-in, `/` serves only the password page. Manual content, knowledge-library, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
+- First-time password setup is allowed only from the server's loopback address. Set `ADMIN_PASSWORD` before starting a remote or Docker deployment.
+- A locally created password is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
+- Successful sign-in creates an HttpOnly, SameSite=Strict cookie. The session expires after eight hours by default and is invalidated by logout or service restart.
+- `ADMIN_API_KEY` remains available as an optional Bearer credential for automation. When `ADMIN_PASSWORD` is absent, it also acts as the web sign-in password.
 
 The model is initially unconfigured. Open the workbench, select “Model Settings,” and provide at least:
 
@@ -47,10 +57,10 @@ For a local run, the default path is `answer-mvp/model-config.json`. Docker uses
 
 The model settings provide two modes:
 
-- `Use managed content only`: the model may answer only from `content.json`. When the available material is insufficient, it returns “No relevant information is currently available in the managed content.”
+- `Use managed content only`: the model may answer only from manual Q&A and imported knowledge files. When the available material is insufficient, it returns “No relevant information is currently available in the managed content.”
 - `Allow general knowledge`: the model prioritizes managed content and may supplement it with general knowledge, but must not invent project-specific dates, locations, fees, people, or rules.
 
-In both modes, `content.json` is model context rather than a collection of final answers returned directly by the API.
+In both modes, manual Q&A and imported knowledge files are model context rather than final answers returned directly by the API.
 
 ## Web Workbench
 
@@ -69,6 +79,18 @@ The model area supports:
 - Selecting the answer scope and setting temperature, maximum output tokens, and timeout.
 - Editing the system prompt.
 - Testing the model connection explicitly.
+
+### Imported Knowledge Library
+
+Select “Knowledge Library” in the header to:
+
+- Import UTF-8 TXT, Markdown, CSV, and JSON files, plus DOCX and text-based PDFs. Scanned PDFs require OCR first.
+- Review selected filenames and sizes before submission. Each request accepts up to 10 files, 10 MB per file, and 30 MB in total.
+- Append while skipping identical SHA-256 content, or replace the complete imported-file collection without changing manual Q&A entries.
+- Preview extracted text, download the preserved original, or delete one document and all its chunks.
+- Persist extracted chunks in `knowledge.json` and originals in `knowledge-files/`; both live under Docker's `/data` volume.
+
+At answer time, the service selects up to 12 relevant imported chunks within the overall context budget. Filenames remain administration-only and are not presented as source attribution in the visitor interface.
 
 ## Digital-Human Frontend
 
@@ -155,7 +177,14 @@ Questions are limited to 500 characters. Use `CORS_ORIGIN` to restrict the permi
 - `PUT /api/model-config`: saves settings; a blank key preserves the existing key. Changed complete connection fields are validated before activation; clients may also send `testConnection: true` explicitly.
 - `POST /api/model-config/test`: sends a connection test using the saved settings.
 
-The model endpoints and `GET/PUT /api/content` use the same administration-access protection.
+The model endpoints, `GET/PUT /api/content`, and the knowledge endpoints use the same administrator-session protection.
+
+### Knowledge Library Endpoints
+
+- `GET /api/knowledge`: list imported document metadata, extraction previews, and the active revision.
+- `POST /api/knowledge/import`: upload `files` as `multipart/form-data`; `mode` is `append` or `replace`.
+- `GET /api/knowledge/:id/download`: download the preserved original.
+- `DELETE /api/knowledge/:id`: delete the original and all extracted chunks.
 
 ### Health and Readiness Endpoints
 
@@ -165,13 +194,13 @@ The model endpoints and `GET/PUT /api/content` use the same administration-acces
 
 ## Administration Access Protection
 
-When `ADMIN_API_KEY` is not set, configuration endpoints accept only same-origin requests from the local machine. To use the workbench from another computer on a campus network or from a server, set both a listening address and a sufficiently long random administration key:
+To use the workbench from another computer on a campus network or from a server, set both a listening address and a strong administration password:
 
 ```bash
-HOST=0.0.0.0 ADMIN_API_KEY='replace-with-a-random-administration-key' npm start
+HOST=0.0.0.0 ADMIN_PASSWORD='replace-with-a-strong-administration-password' npm start
 ```
 
-Open the page, select “Administration Key,” and enter the same value. The key is kept only in the browser tab's session storage. It is a separate credential from the model provider's API key.
+Open the page and sign in with that password. It is separate from the model provider's API key. Configure `ADMIN_API_KEY` separately only when an automated client needs Bearer access.
 
 Before exposing the service publicly, an existing gateway should also provide HTTPS, rate limiting, and an appropriate access-log policy.
 
@@ -191,7 +220,7 @@ Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, 
 npm test
 ```
 
-The current 25 tests cover failed candidate-model rollback, health and readiness state, key non-disclosure and file permissions, OpenAI-compatible request structure, structured answer status, knowledge-context semantics, quick-question synchronization, upstream-error sanitization, configuration authorization, content hot reload, the digital-human state machine, and video range requests.
+The current 32 tests cover first-time password setup, sign-in/logout, salted hashes and same-origin enforcement, knowledge import/deduplication/replacement/deletion, restart recovery, DOCX/PDF extraction and retrieval, failed candidate-model rollback, key non-disclosure, upstream-error sanitization, content hot reload, the digital-human state machine, and video range requests.
 
 ## Docker
 
@@ -199,12 +228,12 @@ The current 25 tests cover failed candidate-model rollback, health and readiness
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
 docker run --rm -p 8080:8080 \
-  -e ADMIN_API_KEY='replace-with-a-random-administration-key' \
+  -e ADMIN_PASSWORD='replace-with-a-strong-administration-password' \
   -v dafuture-answer-data:/data \
   dafuture-answer-mvp
 ```
 
-The named volume persists both `/data/content.json` and `/data/model-config.json`. Never export a volume containing a real key to a public location.
+The named volume persists manual content, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key to a public location.
 
 ## Environment Variables
 
@@ -214,7 +243,13 @@ The named volume persists both `/data/content.json` and `/data/model-config.json
 | `PORT` | `8080` | Listening port |
 | `CONTENT_FILE` | `content.json` in the current directory | Content file; Docker uses `/data/content.json` |
 | `MODEL_CONFIG_FILE` | `model-config.json` beside the content file | Private model configuration; Docker uses `/data/model-config.json` |
+| `KNOWLEDGE_FILE` | `knowledge.json` beside the content file | Extracted text and chunk index |
+| `KNOWLEDGE_FILES_DIR` | `knowledge-files` beside the index | Preserved imported originals |
+| `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time local setup |
+| `ADMIN_PASSWORD` | Not set | Preset web-administration password; recommended for remote deployments |
+| `ADMIN_SESSION_TTL_MS` | `28800000` | Session lifetime, from 15 minutes through seven days |
+| `ADMIN_COOKIE_SECURE` | Automatic | Set `true` behind an HTTPS gateway when the service cannot detect the original protocol |
 | `CONTENT_POLL_INTERVAL_MS` | `2000` | Content polling interval, from 20 to 60,000 milliseconds |
 | `CORS_ORIGIN` | `*` | Allowed origin for the Q&A API |
 | `LOG_LEVEL` | `info` | Fastify log level |
-| `ADMIN_API_KEY` | Not set | Administration key for configuration endpoints; required for non-local access |
+| `ADMIN_API_KEY` | Not set | Optional Bearer API key; also the web password when `ADMIN_PASSWORD` is absent |
