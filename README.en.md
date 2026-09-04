@@ -7,14 +7,14 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 ## Current Status
 
 - Application version: `0.3.0`.
-- The content workbench, model configuration, Q&A API, four-state transparent-video frontend, browser Mandarin voice input, and male speech playback are implemented.
+- A password-protected content workbench, persistent imported-file knowledge library, model configuration, Q&A API, four-state transparent-video frontend, browser Mandarin voice input, and male speech playback are implemented.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
 - No real model configuration is included. Users must enter their own settings in the workbench after the first launch.
 - This is an MVP prototype and has not been deployed to a production server. Production male-avatar media is integrated, and browser playback now prefers Mandarin male voices; cross-device production-grade TTS still needs to be integrated.
 
 ## Quick Start
 
-Node.js 20 or later is required.
+Node.js 20.16–20.x, or Node.js 22.3 and later, is required.
 
 ```bash
 cd answer-mvp
@@ -34,10 +34,11 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 ## Core Capabilities
 
 - Maintain question phrasings, keywords, and confirmed business knowledge in `content.json`.
+- Import TXT, Markdown, CSV, JSON, DOCX, and PDF files through the web UI, preserving originals and a persistent chunk index.
 - Configure an OpenAI-compatible API URL, API key, model name, prompt, and answer scope in the web workbench.
 - Send a user question and managed content to the model through `POST /answer`.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
-- Support content hot reload, atomic saves, revision conflict detection, same-origin local restrictions, and an optional administration key.
+- Protect administration with server-verified passwords, HttpOnly sessions, and same-origin checks, while retaining optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
 - Sanitize upstream model errors so API keys and upstream details are not exposed to the frontend.
 
@@ -70,11 +71,11 @@ npm test
 npm audit --omit=dev
 ```
 
-The current suite contains 25 automated tests covering candidate rollback, Q&A readiness, response-contract semantics, quick-question synchronization, model-configuration security, content hot reload, access control, error sanitization, the avatar state machine, and video range requests.
+The current suite contains 32 automated tests covering administration passwords and sessions, imported-file persistence and restart recovery, DOCX/PDF extraction, candidate rollback, response semantics, model-configuration security, content hot reload, error sanitization, the avatar state machine, and video range requests.
 
 ## Security Boundary for the Public Repository
 
-- Do not commit `answer-mvp/model-config.json`, `.env` files, private keys, certificate private keys, or real API keys.
-- Before exposing administration endpoints remotely, set a strong random `ADMIN_API_KEY` and place the service behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
+- Do not commit `answer-mvp/model-config.json`, `admin-auth.json`, `knowledge.json`, `knowledge-files/`, `.env` files, private keys, or real API keys.
+- Before exposing administration remotely, set a strong `ADMIN_PASSWORD` and place the service behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
 - The included avatar videos are technical demo assets and do not represent the final real-person avatar.
 - Public visibility only makes the repository contents viewable. No open-source license is currently included, so no permission to copy, modify, or distribute is granted automatically.

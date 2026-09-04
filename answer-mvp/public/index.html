@@ -22,11 +22,14 @@
         <a class="button button-secondary" href="/avatar" target="_blank" rel="noopener">
           打开数字人前台
         </a>
+        <button class="button button-secondary" id="open-knowledge-dialog" type="button">
+          知识库
+        </button>
         <button class="button button-secondary" id="open-model-dialog" type="button">
           模型设置
         </button>
-        <button class="button button-quiet" id="open-key-dialog" type="button">
-          管理密钥
+        <button class="button button-quiet" id="logout-admin" type="button">
+          退出登录
         </button>
         <button class="button button-primary" id="save-all" type="button" disabled>
           保存全部更改
@@ -40,7 +43,7 @@
           <p class="eyebrow">CONTENT WORKBENCH · MVP</p>
           <h1 id="page-title">把业务内容交给大模型，生成自然、可播报的回答。</h1>
           <p class="intro-copy">
-            在这里维护问法、关键词和已确认内容，再通过“模型设置”接入 OpenAI 兼容 API。保存后，模型会立即使用新内容组织答案。
+            在这里维护问答条目，或将外部文件导入持久化知识库，再通过“模型设置”接入 OpenAI 兼容 API。保存后，模型会立即使用新内容组织答案。
           </p>
         </div>
 
@@ -50,8 +53,12 @@
             <dd><span class="status-dot" id="status-dot"></span><span id="service-status">连接中</span></dd>
           </div>
           <div>
-            <dt>内容数量</dt>
+            <dt>手工条目</dt>
             <dd id="content-count">—</dd>
+          </div>
+          <div>
+            <dt>知识文件</dt>
+            <dd id="knowledge-count">—</dd>
           </div>
           <div>
             <dt>保存状态</dt>
@@ -175,26 +182,63 @@
       </section>
     </main>
 
-    <dialog id="key-dialog" class="dialog">
-      <form method="dialog" id="key-form">
+    <dialog id="knowledge-dialog" class="dialog dialog-wide knowledge-dialog">
+      <form id="knowledge-form" novalidate>
         <div class="dialog-heading">
           <div>
-            <p class="section-kicker">访问设置</p>
-            <h2>管理密钥</h2>
+            <p class="section-kicker">PERSISTENT KNOWLEDGE</p>
+            <h2>知识库文件</h2>
           </div>
-          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+          <button class="dialog-close" id="close-knowledge-dialog" aria-label="关闭" type="button">×</button>
         </div>
-        <p>服务器设置了 <code>ADMIN_API_KEY</code> 时，在这里输入相同密钥。密钥只保存在当前浏览器标签页。</p>
-        <label class="field">
-          <span class="field-label">管理密钥</span>
-          <input class="visually-hidden" type="text" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
-          <input id="admin-key" type="password" autocomplete="current-password" placeholder="未设置时留空">
+        <p>导入后会保存原文件和提取后的知识片段，服务重启后仍然有效。支持 TXT、Markdown、CSV、JSON、DOCX 和 PDF。</p>
+
+        <section class="knowledge-summary" aria-label="知识库摘要">
+          <div><strong id="knowledge-document-count">0</strong><span>已导入文件</span></div>
+          <div><strong id="knowledge-chunk-count">0</strong><span>可检索片段</span></div>
+          <div><strong id="knowledge-storage-state">读取中</strong><span>持久化状态</span></div>
+        </section>
+
+        <label class="file-drop-zone" for="knowledge-files">
+          <input id="knowledge-files" name="files" type="file" accept=".txt,.md,.csv,.json,.docx,.pdf" multiple required>
+          <span class="file-drop-icon" aria-hidden="true">↑</span>
+          <strong>选择要导入的文件</strong>
+          <small>每次最多 10 个，单个不超过 10 MB，合计不超过 30 MB</small>
         </label>
-        <p class="dialog-message" id="key-message"></p>
-        <div class="dialog-actions">
-          <button class="button button-quiet" value="cancel" type="submit">取消</button>
-          <button class="button button-primary" id="apply-key" value="default" type="submit">连接内容服务</button>
+        <div class="selected-files" id="selected-files" aria-live="polite">尚未选择文件。</div>
+
+        <fieldset class="import-mode">
+          <legend>导入方式</legend>
+          <label>
+            <input type="radio" name="knowledge-mode" value="append" checked>
+            <span><strong>追加</strong><small>保留已有知识，自动跳过内容完全相同的文件。</small></span>
+          </label>
+          <label>
+            <input type="radio" name="knowledge-mode" value="replace">
+            <span><strong>替换</strong><small>清空现有外部文件，只保留本次导入的内容。</small></span>
+          </label>
+        </fieldset>
+        <label class="replace-confirm" id="replace-confirm-row" hidden>
+          <input id="replace-confirm" type="checkbox">
+          <span>我已确认要替换现有外部知识文件。手工问答条目不受影响。</span>
+        </label>
+
+        <p class="dialog-message" id="knowledge-message"></p>
+        <div class="dialog-actions knowledge-import-actions">
+          <button class="button button-quiet" id="cancel-knowledge-import" type="button">关闭</button>
+          <button class="button button-primary" id="import-knowledge" type="submit">导入并保存</button>
         </div>
+
+        <section class="knowledge-library" aria-labelledby="knowledge-library-title">
+          <div class="knowledge-library-heading">
+            <div>
+              <p class="section-kicker">已持久化</p>
+              <h3 id="knowledge-library-title">已导入文件</h3>
+            </div>
+            <button class="button button-quiet button-small" id="refresh-knowledge" type="button">刷新列表</button>
+          </div>
+          <div class="knowledge-document-list" id="knowledge-document-list"></div>
+        </section>
       </form>
     </dialog>
 

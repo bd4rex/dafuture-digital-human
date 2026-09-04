@@ -8,6 +8,8 @@ const state = {
   accessMode: null,
   modelConfig: null,
   modelSaving: false,
+  knowledge: null,
+  knowledgeImporting: false,
   toastTimer: null,
 };
 
@@ -15,6 +17,7 @@ const elements = {
   statusDot: document.querySelector('#status-dot'),
   serviceStatus: document.querySelector('#service-status'),
   contentCount: document.querySelector('#content-count'),
+  knowledgeCount: document.querySelector('#knowledge-count'),
   saveStatus: document.querySelector('#save-status'),
   modelStatus: document.querySelector('#model-status'),
   saveAll: document.querySelector('#save-all'),
@@ -41,6 +44,25 @@ const elements = {
   answerCard: document.querySelector('#answer-card'),
   answerText: document.querySelector('#answer-text'),
   answerMeta: document.querySelector('#answer-meta'),
+  openKnowledgeDialog: document.querySelector('#open-knowledge-dialog'),
+  knowledgeDialog: document.querySelector('#knowledge-dialog'),
+  knowledgeForm: document.querySelector('#knowledge-form'),
+  closeKnowledgeDialog: document.querySelector('#close-knowledge-dialog'),
+  cancelKnowledgeImport: document.querySelector('#cancel-knowledge-import'),
+  knowledgeFiles: document.querySelector('#knowledge-files'),
+  selectedFiles: document.querySelector('#selected-files'),
+  knowledgeModeInputs: [
+    ...document.querySelectorAll('input[name="knowledge-mode"]'),
+  ],
+  replaceConfirmRow: document.querySelector('#replace-confirm-row'),
+  replaceConfirm: document.querySelector('#replace-confirm'),
+  knowledgeMessage: document.querySelector('#knowledge-message'),
+  importKnowledge: document.querySelector('#import-knowledge'),
+  refreshKnowledge: document.querySelector('#refresh-knowledge'),
+  knowledgeDocumentCount: document.querySelector('#knowledge-document-count'),
+  knowledgeChunkCount: document.querySelector('#knowledge-chunk-count'),
+  knowledgeStorageState: document.querySelector('#knowledge-storage-state'),
+  knowledgeDocumentList: document.querySelector('#knowledge-document-list'),
   openModelDialog: document.querySelector('#open-model-dialog'),
   modelDialog: document.querySelector('#model-dialog'),
   modelForm: document.querySelector('#model-form'),
@@ -60,57 +82,30 @@ const elements = {
   modelTimeout: document.querySelector('#model-timeout'),
   modelSystemPrompt: document.querySelector('#model-system-prompt'),
   modelMessage: document.querySelector('#model-message'),
-  openKeyDialog: document.querySelector('#open-key-dialog'),
-  keyDialog: document.querySelector('#key-dialog'),
-  keyForm: document.querySelector('#key-form'),
-  adminKey: document.querySelector('#admin-key'),
-  keyMessage: document.querySelector('#key-message'),
-  applyKey: document.querySelector('#apply-key'),
+  logoutAdmin: document.querySelector('#logout-admin'),
   deleteDialog: document.querySelector('#delete-dialog'),
   deleteMessage: document.querySelector('#delete-message'),
   confirmDelete: document.querySelector('#confirm-delete'),
   toast: document.querySelector('#toast'),
 };
 
-const ADMIN_KEY_STORAGE = 'dafuture-answer-mvp-admin-key';
-
-function getStoredAdminKey() {
-  try {
-    return sessionStorage.getItem(ADMIN_KEY_STORAGE) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-function storeAdminKey(value) {
-  try {
-    if (value) {
-      sessionStorage.setItem(ADMIN_KEY_STORAGE, value);
-    } else {
-      sessionStorage.removeItem(ADMIN_KEY_STORAGE);
-    }
-  } catch {
-    // 浏览器禁用会话存储时，仍允许本次请求继续。
-  }
-}
-
 async function requestJson(url, options = {}) {
   const headers = new Headers(options.headers ?? {});
   headers.set('Accept', 'application/json');
-  if (options.body) {
+  const hasBody = options.body !== undefined;
+  const formDataBody = hasBody && options.body instanceof FormData;
+  if (hasBody && !formDataBody) {
     headers.set('Content-Type', 'application/json');
-  }
-  if (options.admin) {
-    const adminKey = getStoredAdminKey();
-    if (adminKey) {
-      headers.set('Authorization', `Bearer ${adminKey}`);
-    }
   }
 
   const response = await fetch(url, {
     method: options.method ?? 'GET',
     headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    body: hasBody
+      ? formDataBody
+        ? options.body
+        : JSON.stringify(options.body)
+      : undefined,
   });
 
   const raw = await response.text();
@@ -127,6 +122,9 @@ async function requestJson(url, options = {}) {
     const error = new Error(payload.message || `请求失败（${response.status}）`);
     error.status = response.status;
     error.code = payload.error;
+    if (response.status === 401) {
+      window.setTimeout(() => window.location.replace('/'), 0);
+    }
     throw error;
   }
 
@@ -487,7 +485,6 @@ async function saveContent() {
   try {
     const result = await requestJson('/api/content', {
       method: 'PUT',
-      admin: true,
       body: {
         revision: state.revision,
         items: state.items,
@@ -508,13 +505,6 @@ async function saveContent() {
     renderEditor();
     showToast('内容已保存并立即生效。');
   } catch (error) {
-    if (error.status === 401) {
-      elements.keyMessage.textContent = error.message;
-      elements.adminKey.value = getStoredAdminKey();
-      if (!elements.keyDialog.open) {
-        elements.keyDialog.showModal();
-      }
-    }
     updateSaveState(
       error.status === 409 ? '内容版本有冲突' : '保存失败',
     );
@@ -525,16 +515,14 @@ async function saveContent() {
   }
 }
 
-async function loadContent({ openKeyOnUnauthorized = true } = {}) {
+async function loadContent() {
   try {
-    const result = await requestJson('/api/content', { admin: true });
+    const result = await requestJson('/api/content');
     state.items = result.items;
     state.revision = result.revision;
     state.accessMode = result.accessMode;
     state.selectedIndex = state.items.length ? 0 : -1;
     state.dirty = false;
-    elements.openKeyDialog.textContent =
-      result.accessMode === 'api-key' ? '管理密钥 · 已连接' : '本机配置模式';
     renderList();
     renderEditor();
     updateSaveState();
@@ -543,17 +531,303 @@ async function loadContent({ openKeyOnUnauthorized = true } = {}) {
     state.revision = null;
     elements.contentCount.textContent = '—';
     updateSaveState(
-      error.status === 401 ? '需要管理密钥' : '无法读取内容',
+      error.status === 401 ? '需要重新登录' : '无法读取内容',
     );
     showToast(error.message, 'error');
 
-    if (error.status === 401 && openKeyOnUnauthorized) {
-      elements.keyMessage.textContent = error.message;
-      elements.adminKey.value = getStoredAdminKey();
-      elements.keyDialog.showModal();
-      requestAnimationFrame(() => elements.adminKey.focus());
+    return false;
+  }
+}
+
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    return '—';
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '时间未知';
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+function setKnowledgeSnapshot(snapshot) {
+  state.knowledge = snapshot;
+  elements.knowledgeCount.textContent = String(snapshot.documentCount ?? 0);
+  elements.knowledgeDocumentCount.textContent = String(
+    snapshot.documentCount ?? 0,
+  );
+  elements.knowledgeChunkCount.textContent = String(snapshot.chunkCount ?? 0);
+  elements.knowledgeStorageState.textContent = snapshot.revision
+    ? '已持久化'
+    : '待初始化';
+  renderKnowledgeDocuments();
+}
+
+function renderSelectedKnowledgeFiles() {
+  const files = [...elements.knowledgeFiles.files];
+  elements.selectedFiles.replaceChildren();
+  if (files.length === 0) {
+    elements.selectedFiles.textContent = '尚未选择文件。';
+    return;
+  }
+
+  const list = document.createElement('ul');
+  list.className = 'selected-file-list';
+  for (const file of files) {
+    const item = document.createElement('li');
+    item.textContent = `${file.name} · ${formatBytes(file.size)}`;
+    item.title = file.name;
+    list.append(item);
+  }
+  elements.selectedFiles.append(list);
+}
+
+function selectedKnowledgeMode() {
+  return (
+    elements.knowledgeModeInputs.find((input) => input.checked)?.value ??
+    'append'
+  );
+}
+
+function syncKnowledgeMode() {
+  const replacing = selectedKnowledgeMode() === 'replace';
+  elements.replaceConfirmRow.hidden = !replacing;
+  elements.replaceConfirm.required = replacing;
+  if (!replacing) {
+    elements.replaceConfirm.checked = false;
+  }
+}
+
+function renderKnowledgeDocuments() {
+  elements.knowledgeDocumentList.replaceChildren();
+  const documents = state.knowledge?.documents ?? [];
+  if (documents.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'knowledge-list-empty';
+    empty.textContent = '尚未导入外部知识文件。';
+    elements.knowledgeDocumentList.append(empty);
+    return;
+  }
+
+  for (const knowledgeDocument of [...documents].reverse()) {
+    const article = document.createElement('article');
+    article.className = 'knowledge-document';
+
+    const heading = document.createElement('div');
+    heading.className = 'knowledge-document-heading';
+    const name = document.createElement('div');
+    name.className = 'knowledge-document-name';
+    const title = document.createElement('strong');
+    title.textContent = knowledgeDocument.filename;
+    title.title = knowledgeDocument.filename;
+    const meta = document.createElement('small');
+    meta.textContent = [
+      formatBytes(knowledgeDocument.size),
+      `${Number(knowledgeDocument.textLength).toLocaleString('zh-CN')} 字符`,
+      `${knowledgeDocument.chunkCount} 个片段`,
+      formatDate(knowledgeDocument.importedAt),
+    ].join(' · ');
+    name.append(title, meta);
+    const type = document.createElement('span');
+    type.className = 'file-type-badge';
+    type.textContent = knowledgeDocument.extension.replace('.', '');
+    heading.append(name, type);
+
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = '查看提取预览';
+    const preview = document.createElement('pre');
+    preview.textContent = knowledgeDocument.preview || '（无预览）';
+    details.append(summary, preview);
+
+    const actions = document.createElement('div');
+    actions.className = 'knowledge-document-actions';
+    const download = document.createElement('button');
+    download.type = 'button';
+    download.textContent = '下载原文件';
+    download.addEventListener('click', () => {
+      void downloadKnowledgeDocument(knowledgeDocument);
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger';
+    remove.textContent = '删除';
+    remove.addEventListener('click', () => {
+      void deleteKnowledgeDocument(knowledgeDocument);
+    });
+    actions.append(download, remove);
+
+    article.append(heading, details, actions);
+    elements.knowledgeDocumentList.append(article);
+  }
+}
+
+async function loadKnowledge({ silent = false } = {}) {
+  try {
+    const snapshot = await requestJson('/api/knowledge');
+    setKnowledgeSnapshot(snapshot);
+    return true;
+  } catch (error) {
+    state.knowledge = null;
+    elements.knowledgeCount.textContent = '—';
+    elements.knowledgeDocumentCount.textContent = '—';
+    elements.knowledgeChunkCount.textContent = '—';
+    elements.knowledgeStorageState.textContent = '读取失败';
+    renderKnowledgeDocuments();
+    if (!silent && error.status !== 401) {
+      showToast(error.message, 'error');
     }
     return false;
+  }
+}
+
+function setKnowledgeBusy(busy) {
+  state.knowledgeImporting = busy;
+  elements.importKnowledge.disabled = busy;
+  elements.knowledgeFiles.disabled = busy;
+  elements.closeKnowledgeDialog.disabled = busy;
+  elements.cancelKnowledgeImport.disabled = busy;
+  elements.refreshKnowledge.disabled = busy;
+  for (const input of elements.knowledgeModeInputs) {
+    input.disabled = busy;
+  }
+  elements.importKnowledge.textContent = busy
+    ? '正在解析并保存…'
+    : '导入并保存';
+}
+
+async function importKnowledgeFiles(event) {
+  event.preventDefault();
+  if (state.knowledgeImporting) {
+    return;
+  }
+
+  const files = [...elements.knowledgeFiles.files];
+  if (files.length === 0) {
+    elements.knowledgeMessage.textContent = '请先选择要导入的文件。';
+    elements.knowledgeFiles.focus();
+    return;
+  }
+  if (files.length > 10) {
+    elements.knowledgeMessage.textContent = '每次最多导入 10 个文件。';
+    return;
+  }
+  const oversized = files.find((file) => file.size > 10 * 1024 * 1024);
+  if (oversized) {
+    elements.knowledgeMessage.textContent = `文件“${oversized.name}”超过 10 MB 上限。`;
+    return;
+  }
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  if (totalBytes > 30 * 1024 * 1024) {
+    elements.knowledgeMessage.textContent = '所选文件合计超过 30 MB 上限。';
+    return;
+  }
+
+  const mode = selectedKnowledgeMode();
+  if (mode === 'replace' && !elements.replaceConfirm.checked) {
+    elements.knowledgeMessage.textContent = '请先确认替换现有外部知识文件。';
+    elements.replaceConfirm.focus();
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('mode', mode);
+  for (const file of files) {
+    formData.append('files', file, file.name);
+  }
+
+  setKnowledgeBusy(true);
+  elements.knowledgeMessage.textContent = '正在提取文字、切分片段并持久化…';
+  elements.knowledgeMessage.classList.remove('success');
+  try {
+    const result = await requestJson('/api/knowledge/import', {
+      method: 'POST',
+      body: formData,
+    });
+    setKnowledgeSnapshot(result);
+    elements.knowledgeFiles.value = '';
+    renderSelectedKnowledgeFiles();
+    const importedCount = result.imported?.length ?? 0;
+    const skippedCount = result.skipped?.length ?? 0;
+    elements.knowledgeMessage.textContent =
+      importedCount > 0
+        ? `已导入并保存 ${importedCount} 个文件${
+            skippedCount ? `，跳过 ${skippedCount} 个重复文件` : ''
+          }。`
+        : `未新增文件，已跳过 ${skippedCount} 个重复文件。`;
+    elements.knowledgeMessage.classList.add('success');
+    showToast('知识库已持久化并立即生效。');
+    void refreshHealth();
+  } catch (error) {
+    elements.knowledgeMessage.textContent = error.message;
+    elements.knowledgeMessage.classList.remove('success');
+    showToast(error.message, 'error');
+  } finally {
+    setKnowledgeBusy(false);
+  }
+}
+
+async function deleteKnowledgeDocument(knowledgeDocument) {
+  if (
+    !window.confirm(
+      `确定删除“${knowledgeDocument.filename}”吗？原文件和已提取的知识片段都会删除。`,
+    )
+  ) {
+    return;
+  }
+
+  try {
+    const snapshot = await requestJson(
+      `/api/knowledge/${encodeURIComponent(knowledgeDocument.id)}`,
+      { method: 'DELETE' },
+    );
+    setKnowledgeSnapshot(snapshot);
+    elements.knowledgeMessage.textContent = `已删除“${knowledgeDocument.filename}”。`;
+    elements.knowledgeMessage.classList.add('success');
+    showToast('知识文件已删除。');
+  } catch (error) {
+    elements.knowledgeMessage.textContent = error.message;
+    elements.knowledgeMessage.classList.remove('success');
+    showToast(error.message, 'error');
+  }
+}
+
+async function downloadKnowledgeDocument(knowledgeDocument) {
+  try {
+    const response = await fetch(
+      `/api/knowledge/${encodeURIComponent(knowledgeDocument.id)}/download`,
+      { headers: { Accept: '*/*' } },
+    );
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        window.location.replace('/');
+      }
+      throw new Error(payload.message || '原文件下载失败。');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = knowledgeDocument.filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  } catch (error) {
+    showToast(error.message, 'error');
   }
 }
 
@@ -600,7 +874,7 @@ function populateModelForm(config) {
 
 async function loadModelConfig() {
   try {
-    const config = await requestJson('/api/model-config', { admin: true });
+    const config = await requestJson('/api/model-config');
     state.modelConfig = config;
     setModelStatus(config);
     return true;
@@ -681,7 +955,6 @@ async function saveModelConfig(event) {
   try {
     const config = await requestJson('/api/model-config', {
       method: 'PUT',
-      admin: true,
       body: {
         ...requestBody,
         testConnection: shouldTest,
@@ -736,6 +1009,11 @@ async function refreshHealth() {
         connection: { status: health.model.status },
       };
       setModelStatus(modelConfig);
+    }
+    if (health.knowledge) {
+      elements.knowledgeCount.textContent = String(
+        health.knowledge.documentCount ?? 0,
+      );
     }
   } catch {
     setServiceStatus('offline', '无法连接');
@@ -808,6 +1086,35 @@ elements.confirmDelete.addEventListener('click', (event) => {
   deleteCurrentItem();
 });
 elements.testerForm.addEventListener('submit', testQuestion);
+elements.openKnowledgeDialog.addEventListener('click', async () => {
+  elements.knowledgeMessage.textContent = '';
+  elements.knowledgeMessage.classList.remove('success');
+  if (!elements.knowledgeDialog.open) {
+    elements.knowledgeDialog.showModal();
+  }
+  await loadKnowledge();
+});
+elements.closeKnowledgeDialog.addEventListener('click', () => {
+  elements.knowledgeDialog.close();
+});
+elements.cancelKnowledgeImport.addEventListener('click', () => {
+  elements.knowledgeDialog.close();
+});
+elements.knowledgeFiles.addEventListener('change', () => {
+  renderSelectedKnowledgeFiles();
+  elements.knowledgeMessage.textContent = '';
+  elements.knowledgeMessage.classList.remove('success');
+});
+for (const input of elements.knowledgeModeInputs) {
+  input.addEventListener('change', syncKnowledgeMode);
+}
+elements.knowledgeForm.addEventListener('submit', importKnowledgeFiles);
+elements.refreshKnowledge.addEventListener('click', async () => {
+  elements.knowledgeMessage.textContent = '正在刷新…';
+  const loaded = await loadKnowledge({ silent: true });
+  elements.knowledgeMessage.textContent = loaded ? '列表已刷新。' : '列表刷新失败。';
+  elements.knowledgeMessage.classList.toggle('success', loaded);
+});
 elements.openModelDialog.addEventListener('click', () => {
   void openModelSettings();
 });
@@ -818,34 +1125,21 @@ elements.cancelModelSettings.addEventListener('click', () => {
   elements.modelDialog.close();
 });
 elements.modelForm.addEventListener('submit', saveModelConfig);
-
-elements.openKeyDialog.addEventListener('click', () => {
-  elements.adminKey.value = getStoredAdminKey();
-  elements.keyMessage.textContent =
-    state.accessMode === 'local-only'
-      ? '当前为本机配置模式，不需要密钥。'
-      : '';
-  elements.keyDialog.showModal();
-});
-
-elements.keyForm.addEventListener('submit', async (event) => {
-  if (event.submitter?.value === 'cancel') {
+elements.logoutAdmin.addEventListener('click', async () => {
+  if (
+    state.dirty &&
+    !window.confirm('当前还有未保存的问答修改，确定退出吗？')
+  ) {
     return;
   }
-  event.preventDefault();
-  elements.applyKey.disabled = true;
-  elements.keyMessage.textContent = '正在连接…';
-  storeAdminKey(elements.adminKey.value);
-
-  const connected = await loadContent({ openKeyOnUnauthorized: false });
-  elements.applyKey.disabled = false;
-  if (connected) {
-    await loadModelConfig();
-    elements.keyDialog.close();
-    showToast('内容服务已连接。');
-  } else {
-    elements.keyMessage.textContent = '连接失败，请检查管理密钥。';
-    elements.adminKey.focus();
+  elements.logoutAdmin.disabled = true;
+  try {
+    await requestJson('/api/admin/logout', { method: 'POST' });
+    state.dirty = false;
+    window.location.replace('/');
+  } catch (error) {
+    elements.logoutAdmin.disabled = false;
+    showToast(error.message, 'error');
   }
 });
 
@@ -867,8 +1161,10 @@ async function start() {
   await refreshHealth();
   const connected = await loadContent();
   if (connected) {
-    await loadModelConfig();
+    await Promise.all([loadModelConfig(), loadKnowledge()]);
   }
+  renderSelectedKnowledgeFiles();
+  syncKnowledgeMode();
   setInterval(() => void refreshHealth(), 10_000);
 }
 

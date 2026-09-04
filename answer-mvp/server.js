@@ -5,7 +5,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import multipart from '@fastify/multipart';
 import Fastify from 'fastify';
+
+import { AdminAuthStore } from './admin-auth.js';
+import { KnowledgeStore, KNOWLEDGE_LIMITS } from './knowledge-store.js';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONTENT_PATH = path.join(MODULE_DIR, 'content.json');
@@ -555,18 +559,115 @@ function serializeKnowledgeItem(item) {
   ].join('\n');
 }
 
+const GENERIC_QUESTION_TERMS = new Set([
+  '什么',
+  '怎么',
+  '如何',
+  '哪里',
+  '哪些',
+  '是否',
+  '可以',
+  '请问',
+  '一下',
+  '时候',
+  '知道',
+]);
+const IMPORTED_TEXT_NORMALIZATION_CACHE = new WeakMap();
+
+function questionSearchTerms(question) {
+  const normalized = normalizeQuestion(question);
+  const terms = new Set();
+  const latinTerms = question
+    .normalize('NFKC')
+    .toLowerCase()
+    .match(/[a-z0-9]{2,}/g);
+  for (const term of latinTerms ?? []) {
+    terms.add(term);
+  }
+
+  const chinese = normalized.replace(/[^\p{Script=Han}]/gu, '');
+  for (const width of [3, 2]) {
+    for (let index = 0; index <= chinese.length - width; index += 1) {
+      const term = chinese.slice(index, index + width);
+      if (!GENERIC_QUESTION_TERMS.has(term)) {
+        terms.add(term);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function importedKnowledgeRelevanceScore(chunk, normalizedQuestion, searchTerms) {
+  let normalizedText = IMPORTED_TEXT_NORMALIZATION_CACHE.get(chunk);
+  if (normalizedText === undefined) {
+    normalizedText = normalizeQuestion(chunk.text);
+    IMPORTED_TEXT_NORMALIZATION_CACHE.set(chunk, normalizedText);
+  }
+  if (!normalizedText) {
+    return 0;
+  }
+
+  const exactQuestionScore =
+    normalizedQuestion.length >= 4 && normalizedText.includes(normalizedQuestion)
+      ? 50_000
+      : 0;
+  let matchedTerms = 0;
+  let matchedCharacters = 0;
+  for (const term of searchTerms) {
+    if (normalizedText.includes(term)) {
+      matchedTerms += 1;
+      matchedCharacters += characterCount(term);
+    }
+  }
+  return exactQuestionScore + matchedTerms * 120 + matchedCharacters * 5;
+}
+
+function serializeImportedKnowledgeChunk(chunk) {
+  return [
+    `[导入知识片段 ${chunk.id}]`,
+    `已提取内容：${chunk.text}`,
+  ].join('\n');
+}
+
 export function selectKnowledgeContext(
   items,
   question,
-  { maxItems = 30, maxCharacters = 24_000 } = {},
+  {
+    importedChunks = [],
+    maxItems = 30,
+    maxImportedItems = 12,
+    maxCharacters = 24_000,
+  } = {},
 ) {
   const normalizedQuestion = normalizeQuestion(question);
-  const ranked = items
+  const manualCandidates = items
     .map((item, index) => ({
       item,
+      id: item.id,
       index,
       score: relevanceScore(item, normalizedQuestion),
+      text: serializeKnowledgeItem(item),
+      kind: 'manual',
+    }));
+  const searchTerms = questionSearchTerms(question);
+  const importedCandidates = importedChunks
+    .map((chunk, index) => ({
+      item: chunk,
+      id: chunk.id,
+      index,
+      score: importedKnowledgeRelevanceScore(
+        chunk,
+        normalizedQuestion,
+        searchTerms,
+      ),
+      text: serializeImportedKnowledgeChunk(chunk),
+      kind: 'imported',
     }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, maxImportedItems);
+
+  const ranked = [...manualCandidates, ...importedCandidates]
     .sort((left, right) => right.score - left.score || left.index - right.index);
 
   const selected = [];
@@ -575,20 +676,22 @@ export function selectKnowledgeContext(
     if (selected.length >= maxItems) {
       break;
     }
-    const text = serializeKnowledgeItem(candidate.item);
-    if (selected.length > 0 && usedCharacters + text.length > maxCharacters) {
+    if (
+      selected.length > 0 &&
+      usedCharacters + candidate.text.length > maxCharacters
+    ) {
       continue;
     }
-    selected.push({ ...candidate, text });
-    usedCharacters += text.length;
+    selected.push(candidate);
+    usedCharacters += candidate.text.length;
   }
 
   return {
     text: selected.map((entry) => entry.text).join('\n\n'),
-    contextIds: selected.map((entry) => entry.item.id),
+    contextIds: selected.map((entry) => entry.id),
     matchedIds: selected
       .filter((entry) => entry.score > 0)
-      .map((entry) => entry.item.id),
+      .map((entry) => entry.id),
   };
 }
 
@@ -979,6 +1082,22 @@ function integerSetting(value, fallback, { name, minimum, maximum }) {
   return parsed;
 }
 
+function optionalBooleanSetting(value, name) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === 'false' || value === '0') {
+    return false;
+  }
+  throw new Error(`${name} 必须是 true 或 false`);
+}
+
 function parseByteRange(value, size) {
   if (typeof value !== 'string') {
     return null;
@@ -1023,8 +1142,10 @@ export async function buildApp(options = {}) {
   );
   const [
     indexHtml,
+    loginHtml,
     stylesheet,
     browserScript,
+    loginScript,
     avatarHtml,
     avatarStylesheet,
     avatarScript,
@@ -1032,8 +1153,10 @@ export async function buildApp(options = {}) {
     avatarConfigSource,
   ] = await Promise.all([
     readFile(path.join(publicPath, 'index.html'), 'utf8'),
+    readFile(path.join(publicPath, 'login.html'), 'utf8'),
     readFile(path.join(publicPath, 'styles.css'), 'utf8'),
     readFile(path.join(publicPath, 'app.js'), 'utf8'),
+    readFile(path.join(publicPath, 'login.js'), 'utf8'),
     readFile(path.join(publicPath, 'avatar.html'), 'utf8'),
     readFile(path.join(publicPath, 'avatar.css'), 'utf8'),
     readFile(path.join(publicPath, 'avatar.js'), 'utf8'),
@@ -1064,6 +1187,14 @@ export async function buildApp(options = {}) {
       },
     },
   });
+  await app.register(multipart, {
+    limits: {
+      files: KNOWLEDGE_LIMITS.maxFiles,
+      fileSize: KNOWLEDGE_LIMITS.maxFileBytes,
+      fields: 2,
+      parts: KNOWLEDGE_LIMITS.maxFiles + 2,
+    },
+  });
 
   const contentPath = path.resolve(
     options.contentPath ?? process.env.CONTENT_FILE ?? DEFAULT_CONTENT_PATH,
@@ -1072,6 +1203,21 @@ export async function buildApp(options = {}) {
     options.modelConfigPath ??
       process.env.MODEL_CONFIG_FILE ??
       path.join(path.dirname(contentPath), 'model-config.json'),
+  );
+  const knowledgePath = path.resolve(
+    options.knowledgePath ??
+      process.env.KNOWLEDGE_FILE ??
+      path.join(path.dirname(contentPath), 'knowledge.json'),
+  );
+  const knowledgeFilesDirectory = path.resolve(
+    options.knowledgeFilesDirectory ??
+      process.env.KNOWLEDGE_FILES_DIR ??
+      path.join(path.dirname(knowledgePath), 'knowledge-files'),
+  );
+  const adminAuthPath = path.resolve(
+    options.adminAuthPath ??
+      process.env.ADMIN_AUTH_FILE ??
+      path.join(path.dirname(contentPath), 'admin-auth.json'),
   );
   const pollIntervalMs = integerSetting(
     options.pollIntervalMs ?? process.env.CONTENT_POLL_INTERVAL_MS,
@@ -1084,6 +1230,21 @@ export async function buildApp(options = {}) {
   );
   const corsOrigin = options.corsOrigin ?? process.env.CORS_ORIGIN ?? '*';
   const adminApiKey = options.adminApiKey ?? process.env.ADMIN_API_KEY ?? '';
+  const adminPassword =
+    options.adminPassword ?? process.env.ADMIN_PASSWORD ?? adminApiKey;
+  const adminSessionTtlMs = integerSetting(
+    options.adminSessionTtlMs ?? process.env.ADMIN_SESSION_TTL_MS,
+    8 * 60 * 60 * 1_000,
+    {
+      name: 'ADMIN_SESSION_TTL_MS',
+      minimum: 15 * 60 * 1_000,
+      maximum: 7 * 24 * 60 * 60 * 1_000,
+    },
+  );
+  const secureAdminCookies = optionalBooleanSetting(
+    options.secureAdminCookies ?? process.env.ADMIN_COOKIE_SECURE,
+    'ADMIN_COOKIE_SECURE',
+  );
   const llmFetch = options.llmFetch ?? globalThis.fetch;
   if (typeof llmFetch !== 'function') {
     throw new Error('当前 Node.js 运行环境不支持 fetch，无法调用大语言模型接口');
@@ -1100,6 +1261,20 @@ export async function buildApp(options = {}) {
     logger: app.log,
   });
   await modelConfigStore.start();
+  const knowledgeStore = new KnowledgeStore({
+    knowledgePath,
+    filesDirectory: knowledgeFilesDirectory,
+    logger: app.log,
+  });
+  await knowledgeStore.start();
+  const adminAuthStore = new AdminAuthStore({
+    configPath: adminAuthPath,
+    presetPassword: adminPassword,
+    sessionTtlMs: adminSessionTtlMs,
+    secureCookies: secureAdminCookies,
+    logger: app.log,
+  });
+  await adminAuthStore.start();
 
   const connectionTestMessages = Object.freeze([
     Object.freeze({
@@ -1166,6 +1341,14 @@ export async function buildApp(options = {}) {
           ? { lastReloadError: contentStore.lastReloadError }
           : {}),
       },
+      knowledge: {
+        status: 'current',
+        ready: true,
+        documentCount: knowledgeStore.documents.length,
+        chunkCount: knowledgeStore.chunkCount(),
+        revision: knowledgeStore.revision,
+        loadedAt: knowledgeStore.loadedAt,
+      },
       model: {
         status: modelConnection.status,
         ready: modelReady,
@@ -1181,12 +1364,14 @@ export async function buildApp(options = {}) {
 
   app.decorate('contentStore', contentStore);
   app.decorate('modelConfigStore', modelConfigStore);
+  app.decorate('knowledgeStore', knowledgeStore);
+  app.decorate('adminAuthStore', adminAuthStore);
   app.addHook('onClose', async () => {
     contentStore.stop();
   });
   app.addHook('onRequest', async (_request, reply) => {
     reply.header('Access-Control-Allow-Origin', corsOrigin);
-    reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+    reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     reply.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
@@ -1196,7 +1381,31 @@ export async function buildApp(options = {}) {
   });
 
   app.options('/answer', async (_request, reply) => reply.code(204).send());
+  app.options('/api/admin/status', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/admin/setup', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/admin/login', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/admin/logout', async (_request, reply) =>
+    reply.code(204).send(),
+  );
   app.options('/api/content', async (_request, reply) => reply.code(204).send());
+  app.options('/api/knowledge', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/knowledge/import', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/knowledge/:id', async (_request, reply) =>
+    reply.code(204).send(),
+  );
+  app.options('/api/knowledge/:id/download', async (_request, reply) =>
+    reply.code(204).send(),
+  );
   app.options('/api/model-config', async (_request, reply) =>
     reply.code(204).send(),
   );
@@ -1204,35 +1413,70 @@ export async function buildApp(options = {}) {
     reply.code(204).send(),
   );
 
-  const requireContentAccess = async (request, reply) => {
-    if (adminApiKey) {
-      if (bearerTokenMatches(request.headers.authorization, adminApiKey)) {
-        return;
-      }
-
-      reply.header('WWW-Authenticate', 'Bearer');
-      return reply.code(401).send({
-        error: 'ADMIN_AUTH_REQUIRED',
-        message: '请输入正确的管理密钥后重试。',
-      });
-    }
-
-    if (isLoopbackAddress(request.ip) && isSameOriginRequest(request)) {
+  const hasBearerAccess = (request) =>
+    Boolean(
+      adminApiKey &&
+        bearerTokenMatches(request.headers.authorization, adminApiKey),
+    );
+  const requireAdminAccess = async (request, reply) => {
+    if (hasBearerAccess(request)) {
+      request.adminAccessMode = 'api-key';
       return;
     }
 
-    return reply.code(403).send({
-      error: 'LOCAL_ADMIN_ONLY',
-      message: '未配置 ADMIN_API_KEY 时，内容配置功能只允许从本机同源页面访问。',
+    if (adminAuthStore.hasValidSession(request)) {
+      if (!isSameOriginRequest(request)) {
+        return reply.code(403).send({
+          error: 'ADMIN_ORIGIN_REJECTED',
+          message: '管理会话只允许从同源页面使用。',
+        });
+      }
+      request.adminAccessMode = 'session';
+      return;
+    }
+
+    reply.header('WWW-Authenticate', 'Bearer');
+    return reply.code(401).send({
+      error: adminAuthStore.setupRequired()
+        ? 'ADMIN_SETUP_REQUIRED'
+        : 'ADMIN_AUTH_REQUIRED',
+      message: adminAuthStore.setupRequired()
+        ? '请先从服务器本机设置管理密码。'
+        : '管理会话已失效，请重新登录。',
     });
   };
 
-  app.get('/', async (_request, reply) =>
+  const loginAttempts = new Map();
+  const loginAttemptWindowMs = 5 * 60 * 1_000;
+  const loginAttemptLimit = 5;
+  const loginAttempt = (address) => {
+    const now = Date.now();
+    const current = loginAttempts.get(address);
+    if (!current || current.resetAt <= now) {
+      const fresh = { count: 0, resetAt: now + loginAttemptWindowMs };
+      loginAttempts.set(address, fresh);
+      return fresh;
+    }
+    return current;
+  };
+
+  const adminPageCsp =
+    "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'";
+
+  app.get('/', async (request, reply) =>
     reply
-      .header('Content-Security-Policy', "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'")
+      .header('Content-Security-Policy', adminPageCsp)
       .header('Cache-Control', 'no-store')
       .type('text/html; charset=utf-8')
-      .send(indexHtml),
+      .send(adminAuthStore.hasValidSession(request) ? indexHtml : loginHtml),
+  );
+
+  app.get('/login', async (_request, reply) =>
+    reply
+      .header('Content-Security-Policy', adminPageCsp)
+      .header('Cache-Control', 'no-store')
+      .type('text/html; charset=utf-8')
+      .send(loginHtml),
   );
 
   app.get('/styles.css', async (_request, reply) =>
@@ -1242,11 +1486,21 @@ export async function buildApp(options = {}) {
       .send(stylesheet),
   );
 
-  app.get('/app.js', async (_request, reply) =>
+  app.get(
+    '/app.js',
+    { preHandler: requireAdminAccess },
+    async (_request, reply) =>
+      reply
+        .header('Cache-Control', 'no-cache')
+        .type('text/javascript; charset=utf-8')
+        .send(browserScript),
+  );
+
+  app.get('/login.js', async (_request, reply) =>
     reply
       .header('Cache-Control', 'no-cache')
       .type('text/javascript; charset=utf-8')
-      .send(browserScript),
+      .send(loginScript),
   );
 
   const sendAvatarPage = async (_request, reply) =>
@@ -1351,14 +1605,127 @@ export async function buildApp(options = {}) {
       .send(createReadStream(mediaPath));
   });
 
+  app.get('/api/admin/status', async (request, reply) =>
+    reply
+      .header('Cache-Control', 'no-store')
+      .send({
+        authenticated:
+          adminAuthStore.hasValidSession(request) || hasBearerAccess(request),
+        setupRequired: adminAuthStore.setupRequired(),
+        setupAllowed:
+          adminAuthStore.setupRequired() &&
+          isLoopbackAddress(request.ip) &&
+          isSameOriginRequest(request),
+      }),
+  );
+
+  app.post('/api/admin/setup', async (request, reply) => {
+    if (!isLoopbackAddress(request.ip) || !isSameOriginRequest(request)) {
+      return reply.code(403).send({
+        error: 'ADMIN_SETUP_LOCAL_ONLY',
+        message:
+          '首次密码只能在服务器本机设置；远程部署请通过 ADMIN_PASSWORD 环境变量预设。',
+      });
+    }
+    if (
+      !request.body ||
+      typeof request.body !== 'object' ||
+      Array.isArray(request.body) ||
+      typeof request.body.password !== 'string' ||
+      Object.keys(request.body).some((key) => key !== 'password')
+    ) {
+      return reply.code(400).send({
+        error: 'ADMIN_PASSWORD_INVALID',
+        message: '请提供 password 字符串。',
+      });
+    }
+
+    await adminAuthStore.setup(request.body.password);
+    const token = adminAuthStore.createSession();
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('Set-Cookie', adminAuthStore.cookie(token, request))
+      .send({ ok: true });
+  });
+
+  app.post('/api/admin/login', async (request, reply) => {
+    if (!isSameOriginRequest(request)) {
+      return reply.code(403).send({
+        error: 'ADMIN_ORIGIN_REJECTED',
+        message: '管理登录只允许从同源页面发起。',
+      });
+    }
+    if (adminAuthStore.setupRequired()) {
+      return reply.code(409).send({
+        error: 'ADMIN_SETUP_REQUIRED',
+        message: '尚未设置管理密码。',
+      });
+    }
+    if (
+      !request.body ||
+      typeof request.body !== 'object' ||
+      Array.isArray(request.body) ||
+      typeof request.body.password !== 'string' ||
+      Object.keys(request.body).some((key) => key !== 'password')
+    ) {
+      return reply.code(400).send({
+        error: 'ADMIN_PASSWORD_INVALID',
+        message: '请输入管理密码。',
+      });
+    }
+
+    const attempt = loginAttempt(request.ip);
+    if (attempt.count >= loginAttemptLimit) {
+      const retryAfter = Math.max(
+        1,
+        Math.ceil((attempt.resetAt - Date.now()) / 1_000),
+      );
+      return reply
+        .code(429)
+        .header('Retry-After', retryAfter)
+        .send({
+          error: 'ADMIN_LOGIN_RATE_LIMITED',
+          message: '失败次数过多，请稍后再试。',
+        });
+    }
+
+    const valid = await adminAuthStore.verify(request.body.password);
+    if (!valid) {
+      attempt.count += 1;
+      return reply.code(401).send({
+        error: 'ADMIN_LOGIN_FAILED',
+        message: '管理密码不正确。',
+      });
+    }
+
+    loginAttempts.delete(request.ip);
+    const token = adminAuthStore.createSession();
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('Set-Cookie', adminAuthStore.cookie(token, request))
+      .send({ ok: true });
+  });
+
+  app.post('/api/admin/logout', async (request, reply) => {
+    adminAuthStore.destroySession(request);
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('Set-Cookie', adminAuthStore.clearCookie(request))
+      .send({ ok: true });
+  });
+
   app.get('/api', async () => ({
     service: '大未来数字人问答 MVP',
     version: '0.3.0',
     contentCount: contentStore.items.length,
+    knowledgeDocumentCount: knowledgeStore.documents.length,
+    knowledgeChunkCount: knowledgeStore.chunkCount(),
     endpoints: {
       answer: 'POST /answer',
       avatar: 'GET /avatar',
       content: 'GET,PUT /api/content',
+      knowledge: 'GET /api/knowledge',
+      knowledgeImport: 'POST /api/knowledge/import',
       modelConfig: 'GET,PUT /api/model-config',
       modelTest: 'POST /api/model-config/test',
       health: 'GET /health',
@@ -1375,18 +1742,18 @@ export async function buildApp(options = {}) {
 
   app.get(
     '/api/content',
-    { preHandler: requireContentAccess },
-    async () => ({
+    { preHandler: requireAdminAccess },
+    async (request) => ({
       items: editableContent(contentStore.items),
       revision: contentStore.activeHash,
       loadedAt: contentStore.loadedAt,
-      accessMode: adminApiKey ? 'api-key' : 'local-only',
+      accessMode: request.adminAccessMode,
     }),
   );
 
   app.put(
     '/api/content',
-    { preHandler: requireContentAccess },
+    { preHandler: requireAdminAccess },
     async (request, reply) => {
       const body = request.body;
       if (
@@ -1406,23 +1773,135 @@ export async function buildApp(options = {}) {
       const saved = await contentStore.save(body.items, body.revision);
       return {
         ...saved,
-        accessMode: adminApiKey ? 'api-key' : 'local-only',
+        accessMode: request.adminAccessMode,
       };
     },
   );
 
   app.get(
+    '/api/knowledge',
+    { preHandler: requireAdminAccess },
+    async (request) => ({
+      ...knowledgeStore.publicSnapshot(),
+      accessMode: request.adminAccessMode,
+    }),
+  );
+
+  app.post(
+    '/api/knowledge/import',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      if (!request.isMultipart()) {
+        return reply.code(415).send({
+          error: 'KNOWLEDGE_MULTIPART_REQUIRED',
+          message: '请使用 multipart/form-data 上传知识文件。',
+        });
+      }
+
+      const files = [];
+      let mode = 'append';
+      let totalBytes = 0;
+      for await (const part of request.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname !== 'files') {
+            part.file.resume();
+            return reply.code(400).send({
+              error: 'KNOWLEDGE_INVALID_FIELD',
+              message: '文件字段名必须为 files。',
+            });
+          }
+          const buffer = await part.toBuffer();
+          totalBytes += buffer.length;
+          if (totalBytes > KNOWLEDGE_LIMITS.maxTotalBytes) {
+            return reply.code(413).send({
+              error: 'KNOWLEDGE_TOTAL_TOO_LARGE',
+              message: '本次导入的文件合计超过 30 MB 上限。',
+            });
+          }
+          files.push({
+            filename: part.filename,
+            mimetype: part.mimetype,
+            buffer,
+          });
+          continue;
+        }
+
+        if (part.fieldname === 'mode') {
+          mode = String(part.value);
+        } else {
+          return reply.code(400).send({
+            error: 'KNOWLEDGE_INVALID_FIELD',
+            message: `不支持导入字段：${part.fieldname}。`,
+          });
+        }
+      }
+
+      return {
+        ...(await knowledgeStore.importFiles(files, mode)),
+        accessMode: request.adminAccessMode,
+      };
+    },
+  );
+
+  app.get(
+    '/api/knowledge/:id/download',
+    { preHandler: requireAdminAccess },
+    async (request, reply) => {
+      const document = knowledgeStore.findDocument(request.params.id);
+      if (!document) {
+        return reply.code(404).send({
+          error: 'KNOWLEDGE_NOT_FOUND',
+          message: '未找到该知识文件。',
+        });
+      }
+      const fileStat = await knowledgeStore.originalStat(document);
+      if (!fileStat) {
+        return reply.code(404).send({
+          error: 'KNOWLEDGE_ORIGINAL_MISSING',
+          message: '该知识文件的原文件已缺失，但已提取内容仍可用于问答。',
+        });
+      }
+
+      const fallbackFilename = document.filename
+        .replace(/[^\x20-\x7e]/g, '_')
+        .replace(/["\\]/g, '_');
+      const encodedFilename = encodeURIComponent(document.filename).replace(
+        /['()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+      );
+      return reply
+        .header('Cache-Control', 'private, no-store')
+        .header(
+          'Content-Disposition',
+          `attachment; filename="${fallbackFilename}"; filename*=UTF-8''${encodedFilename}`,
+        )
+        .header('Content-Length', fileStat.size)
+        .type(document.mediaType)
+        .send(createReadStream(knowledgeStore.originalPath(document)));
+    },
+  );
+
+  app.delete(
+    '/api/knowledge/:id',
+    { preHandler: requireAdminAccess },
+    async (request) => ({
+      ...(await knowledgeStore.deleteDocument(request.params.id)),
+      accessMode: request.adminAccessMode,
+    }),
+  );
+
+  app.get(
     '/api/model-config',
-    { preHandler: requireContentAccess },
-    async () => ({
+    { preHandler: requireAdminAccess },
+    async (request) => ({
       ...modelConfigStore.publicConfig(),
-      accessMode: adminApiKey ? 'api-key' : 'local-only',
+      accessMode: request.adminAccessMode,
     }),
   );
 
   app.put(
     '/api/model-config',
-    { preHandler: requireContentAccess },
+    { preHandler: requireAdminAccess },
     async (request) => ({
       ...(await modelConfigStore.save(request.body, {
         validate: async (candidateConfig) => {
@@ -1438,13 +1917,13 @@ export async function buildApp(options = {}) {
           };
         },
       })),
-      accessMode: adminApiKey ? 'api-key' : 'local-only',
+      accessMode: request.adminAccessMode,
     }),
   );
 
   app.post(
     '/api/model-config/test',
-    { preHandler: requireContentAccess },
+    { preHandler: requireAdminAccess },
     async (_request, reply) => {
       if (!modelConfigStore.isConfigured()) {
         return reply.code(503).send({
@@ -1499,6 +1978,7 @@ export async function buildApp(options = {}) {
       const context = selectKnowledgeContext(
         contentStore.items,
         request.body.question,
+        { importedChunks: knowledgeStore.importedChunks() },
       );
       const result = await callTrackedModel(
         modelConfigStore.config,
@@ -1546,6 +2026,38 @@ export async function buildApp(options = {}) {
       });
     }
 
+    if (typeof error.code === 'string' && error.code.startsWith('KNOWLEDGE_')) {
+      return reply.code(error.statusCode ?? 400).send({
+        error: error.code,
+        message: error.message,
+      });
+    }
+
+    if (typeof error.code === 'string' && error.code.startsWith('ADMIN_')) {
+      return reply.code(error.statusCode ?? 400).send({
+        error: error.code,
+        message: error.message,
+      });
+    }
+
+    if (
+      [
+        'FST_REQ_FILE_TOO_LARGE',
+        'FST_FILES_LIMIT',
+        'FST_FIELDS_LIMIT',
+        'FST_PARTS_LIMIT',
+      ].includes(error.code)
+    ) {
+      const message =
+        error.code === 'FST_REQ_FILE_TOO_LARGE'
+          ? '单个文件不能超过 10 MB。'
+          : `每次最多导入 ${KNOWLEDGE_LIMITS.maxFiles} 个文件。`;
+      return reply.code(413).send({
+        error: 'KNOWLEDGE_UPLOAD_LIMIT',
+        message,
+      });
+    }
+
     if (
       [
         'MODEL_TIMEOUT',
@@ -1576,6 +2088,8 @@ export async function buildApp(options = {}) {
           ? '内容保存失败，请检查 content.json 所在目录的写入权限。'
           : request.routeOptions?.url === '/api/model-config'
             ? '模型配置保存失败，请检查配置文件所在目录的写入权限。'
+            : request.routeOptions?.url?.startsWith('/api/knowledge')
+              ? '知识库操作失败，请检查存储目录的写入权限。'
           : '服务暂时无法处理该请求。',
     });
   });

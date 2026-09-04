@@ -2,25 +2,33 @@
 
 # “大未来”大模型数字人问答 MVP
 
-这是一个可运行的本地原型：访客在数字人前台提问，服务把问题与 `content.json` 中维护的业务知识交给后台配置的大语言模型，再将模型生成的文字用于页面显示和浏览器语音播报。
+这是一个可运行的本地原型：访客在数字人前台提问，服务把问题与手工问答、外部文件知识库交给后台配置的大语言模型，再将模型生成的文字用于页面显示和浏览器语音播报。
 
 当前支持 OpenAI 兼容的 `/chat/completions` 接口。模型 API 地址、API Key、模型名、回答范围和系统提示词均可在 Web 工作台中配置。
 
 ## 本地运行
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 20.16—20.x，或 Node.js 22.3 及更高版本。
 
 ```bash
 npm install
 npm start
 ```
 
-服务默认只监听本机 `http://127.0.0.1:8080`：
+服务默认只监听本机 `http://127.0.0.1:8080`。首次打开管理页时需要设置一个至少 8 位的管理密码：
 
 - `http://127.0.0.1:8080/`：内容与模型配置工作台。
 - `http://127.0.0.1:8080/avatar`：面向访客的数字人问答前台。
 - `http://127.0.0.1:8080/health`：服务诊断、内容版本和模型连接状态（始终返回 HTTP 200）。
 - `http://127.0.0.1:8080/ready`：问答就绪检查；不可用时返回 HTTP 503。
+
+## 管理员登录
+
+- 未登录时，管理地址只显示密码页；手工内容、知识库和模型配置接口同时由服务端拦截。
+- 没有预设密码时，只能从服务器本机完成首次设置；远程或 Docker 部署应设置 `ADMIN_PASSWORD`。
+- 密码只以 scrypt 加盐哈希保存到 `admin-auth.json`，文件权限为 `0600`，不保存明文。
+- 登录后使用 HttpOnly、SameSite=Strict 会话 Cookie，默认 8 小时过期；服务重启或点击“退出登录”后会话失效。
+- `ADMIN_API_KEY` 仍可作为 Bearer 密钥供自动化客户端调用；未单独设置 `ADMIN_PASSWORD` 时，它也是 Web 登录密码。
 
 首次启动时模型处于“等待配置”状态。打开工作台，点击“模型设置”，至少填写：
 
@@ -47,10 +55,10 @@ npm start
 
 模型设置提供两种模式：
 
-- `仅依据后台内容`：模型只能基于 `content.json` 回答；资料不足时返回“当前内容中暂无相关信息。”。
+- `仅依据后台内容`：模型只能基于手工问答与已导入知识文件回答；资料不足时返回“当前内容中暂无相关信息。”。
 - `允许补充一般知识`：优先使用后台内容，可以补充通用知识，但不得编造本项目专属的日期、地点、费用、人员或规则。
 
-无论选择哪种模式，`content.json` 都只是模型的知识上下文，不会再被接口直接当作最终答案返回。
+无论选择哪种模式，手工问答和已导入知识文件都只是模型的知识上下文，不会被接口直接当作最终答案返回。
 
 ## Web 工作台
 
@@ -69,6 +77,18 @@ npm start
 - 切换回答范围，设置随机度、最大输出 Tokens 和超时。
 - 编辑系统提示词。
 - 主动测试模型连接。
+
+### 外部文件知识库
+
+点击顶部“知识库”可以：
+
+- 导入 UTF-8 编码的 TXT、Markdown、CSV、JSON，以及 DOCX 和含文本层的 PDF。扫描 PDF 需要先做 OCR。
+- 在提交前预览文件名、大小和导入方式；每次最多 10 个文件，单个最大 10 MB，合计最大 30 MB。
+- 选择“追加”保留现有文件，相同 SHA-256 内容会自动跳过；选择“替换”则只保留本次文件。
+- 查看提取预览、下载原文件，或删除单个文件。
+- 原文件保存在 `knowledge-files/`，提取文字和分片索引保存在 `knowledge.json`；两者都会随 Docker `/data` 卷持久化。
+
+问答时服务会根据问题检索相关文件片段，最多取 12 个并受总上下文长度限制。文件名只在管理页显示，不会作为访客端的“资料来源”展示。
 
 ## 数字人前台
 
@@ -155,7 +175,14 @@ http://127.0.0.1:8080/avatar?preview=1
 - `PUT /api/model-config`：保存设置；空 Key 保留旧值。完整连接字段发生变化时先验证后切换，也可显式发送 `testConnection: true`。
 - `POST /api/model-config/test`：使用已保存设置发起一次连接测试。
 
-模型接口与 `GET/PUT /api/content` 使用相同的后台访问保护。
+模型接口、`GET/PUT /api/content` 与知识库接口使用相同的后台登录保护。
+
+### 知识库接口
+
+- `GET /api/knowledge`：读取已导入文件摘要、提取预览和版本号。
+- `POST /api/knowledge/import`：使用 `multipart/form-data` 上传 `files`，`mode` 可为 `append` 或 `replace`。
+- `GET /api/knowledge/:id/download`：下载已保存原文件。
+- `DELETE /api/knowledge/:id`：删除原文件及其全部片段。
 
 ### 健康与就绪接口
 
@@ -165,13 +192,13 @@ http://127.0.0.1:8080/avatar?preview=1
 
 ## 后台访问保护
 
-不设置 `ADMIN_API_KEY` 时，配置接口只接受本机同源页面访问。需要从校园网其他电脑或服务器访问时，应同时设置监听地址和足够长的随机管理密钥：
+需要从校园网其他电脑或服务器访问时，应同时设置监听地址和足够长的管理密码：
 
 ```bash
-HOST=0.0.0.0 ADMIN_API_KEY='请替换为随机管理密钥' npm start
+HOST=0.0.0.0 ADMIN_PASSWORD='请替换为强管理密码' npm start
 ```
 
-打开页面后点击“管理密钥”，输入相同内容即可。该管理密钥只保存在当前浏览器标签页的会话存储中。它与模型服务的 API Key 是两个独立凭据。
+打开页面后使用该密码登录。管理密码与模型服务的 API Key 是两个独立凭据。如需给自动化程序另行授权，再单独设置 `ADMIN_API_KEY`。
 
 正式对公网开放时，还应由现有网关提供 HTTPS、限流和适当的访问日志策略。
 
@@ -191,7 +218,16 @@ HOST=0.0.0.0 ADMIN_API_KEY='请替换为随机管理密钥' npm start
 npm test
 ```
 
-当前 25 项测试覆盖候选模型配置失败回滚、健康与就绪状态、Key 不回显和文件权限、OpenAI 兼容请求结构、结构化回答状态、知识上下文语义、快捷问题同步、上游错误脱敏、配置接口鉴权、内容热加载、数字人状态机和视频 Range 请求。
+当前 32 项测试覆盖管理密码首次设置、登录与退出、加盐哈希和同源保护、知识文件导入/去重/替换/删除、重启恢复、DOCX/PDF 文字提取、知识上下文检索、候选模型配置失败回滚、Key 不回显、上游错误脱敏、内容热加载、数字人状态机和视频 Range 请求。
+
+核心问答功能用例和容量/稳定性用例可分别执行：
+
+```bash
+npm run test:functional
+npm run test:capacity
+```
+
+并发阶梯、CPU/RSS 采样、稳定性浸泡和真实模型测试环境的用法见 [TESTING.md](TESTING.md)。容量测试不会被普通 `npm test` 自动执行。
 
 ## Docker 运行
 
@@ -199,12 +235,12 @@ npm test
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
 docker run --rm -p 8080:8080 \
-  -e ADMIN_API_KEY='请替换为随机管理密钥' \
+  -e ADMIN_PASSWORD='请替换为强管理密码' \
   -v dafuture-answer-data:/data \
   dafuture-answer-mvp
 ```
 
-命名卷同时持久化 `/data/content.json` 和 `/data/model-config.json`。不要把含真实 Key 的卷导出到公开位置。
+命名卷同时持久化手工内容、模型配置、管理密码哈希、知识索引和原文件。不要把含真实 Key 的卷导出到公开位置。
 
 ## 环境变量
 
@@ -214,7 +250,13 @@ docker run --rm -p 8080:8080 \
 | `PORT` | `8080` | 监听端口 |
 | `CONTENT_FILE` | 当前目录的 `content.json` | 内容文件；Docker 使用 `/data/content.json` |
 | `MODEL_CONFIG_FILE` | 与内容文件同目录的 `model-config.json` | 模型私有配置；Docker 使用 `/data/model-config.json` |
+| `KNOWLEDGE_FILE` | 与内容文件同目录的 `knowledge.json` | 已提取文字与分片索引 |
+| `KNOWLEDGE_FILES_DIR` | 知识索引同目录的 `knowledge-files` | 已导入原文件目录 |
+| `ADMIN_AUTH_FILE` | 与内容文件同目录的 `admin-auth.json` | 首次设置的管理密码加盐哈希 |
+| `ADMIN_PASSWORD` | 未设置 | Web 管理页预设密码；远程部署建议必填 |
+| `ADMIN_SESSION_TTL_MS` | `28800000` | 管理会话有效期，可设 15 分钟至 7 天 |
+| `ADMIN_COOKIE_SECURE` | 自动 | HTTPS 网关后若服务无法识别原始协议，可显式设为 `true` |
 | `CONTENT_POLL_INTERVAL_MS` | `2000` | 内容文件检查间隔，20—60000 毫秒 |
 | `CORS_ORIGIN` | `*` | 允许调用问答接口的前台来源 |
 | `LOG_LEVEL` | `info` | Fastify 日志级别 |
-| `ADMIN_API_KEY` | 未设置 | 后台配置接口的管理密钥；从非本机访问时必须设置 |
+| `ADMIN_API_KEY` | 未设置 | 可选的 Bearer API 密钥；未设 `ADMIN_PASSWORD` 时也作为 Web 登录密码 |

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123f3a">
+    <title>管理员登录 · 大未来数字人</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23123f3a'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='34' fill='white'%3E%E6%9C%AA%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="login-brand">
+          <span class="brand-mark" aria-hidden="true">未</span>
+          <div>
+            <strong>大未来</strong>
+            <small>数字人内容工作台</small>
+          </div>
+        </div>
+        <p class="section-kicker" id="login-kicker">ADMIN ACCESS</p>
+        <h1 id="login-title">进入管理后台</h1>
+        <p class="login-copy" id="login-copy">请输入管理密码。登录会话仅保存在当前浏览器中。</p>
+
+        <form id="login-form" class="login-form" novalidate>
+          <label class="field">
+            <span class="field-label" id="password-label">管理密码</span>
+            <input class="visually-hidden" type="text" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true">
+            <input id="login-password" type="password" minlength="8" maxlength="200" autocomplete="current-password" required autofocus>
+          </label>
+          <label class="field" id="confirm-password-field" hidden>
+            <span class="field-label">再次输入密码</span>
+            <input id="confirm-password" type="password" minlength="8" maxlength="200" autocomplete="new-password">
+          </label>
+          <p class="dialog-message login-message" id="login-message" aria-live="polite"></p>
+          <button class="button button-primary login-submit" id="login-submit" type="submit">登录</button>
+        </form>
+
+        <div class="login-footer">
+          <a href="/avatar">返回数字人前台</a>
+          <span>管理操作需要服务端验证</span>
+        </div>
+      </section>
+    </main>
+    <script src="/login.js" defer></script>
+  </body>
+</html>
