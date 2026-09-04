@@ -141,6 +141,7 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.match(pageResponse.headers['content-type'], /text\/html/);
   assert.match(pageResponse.headers['content-security-policy'], /media-src 'self'/);
   assert.match(pageResponse.body, /主持开场/);
+  assert.equal((pageResponse.body.match(/data-avatar-video=/g) ?? []).length, 4);
   assert.doesNotMatch(pageResponse.body, /资料来源/);
 
   const configResponse = await app.inject({
@@ -148,17 +149,24 @@ test('数字人前台和四态配置可直接访问', async (t) => {
     url: '/avatar-config.json',
   });
   assert.equal(configResponse.statusCode, 200);
-  assert.deepEqual(Object.keys(configResponse.json().states), [
+  const avatarConfig = configResponse.json();
+  assert.equal(avatarConfig.mediaMode, 'production');
+  assert.deepEqual(Object.keys(avatarConfig.states), [
     'idle',
     'thinking',
     'speaking',
     'presenting',
   ]);
-  assert.deepEqual(configResponse.json().quickQuestions, [
+  for (const [state, stateConfig] of Object.entries(avatarConfig.states)) {
+    assert.equal(stateConfig.sources.length, 2);
+    assert.match(stateConfig.sources[0].src, new RegExp(`${state}\\.mov\\?v=`));
+    assert.match(stateConfig.sources[1].src, new RegExp(`${state}\\.webm\\?v=`));
+  }
+  assert.deepEqual(avatarConfig.quickQuestions, [
     '培训地点在哪里？',
     '什么是大未来项目？',
   ]);
-  assert.match(configResponse.json().contentRevision, /^[a-f0-9]{64}$/);
+  assert.match(avatarConfig.contentRevision, /^[a-f0-9]{64}$/);
 });
 
 test('访客快捷问题随内容工作台保存结果和版本号更新', async (t) => {

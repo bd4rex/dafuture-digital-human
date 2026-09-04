@@ -22,8 +22,7 @@ const elements = {
   stateLabel: document.querySelector('#avatar-state-label'),
   stateHint: document.querySelector('#avatar-state-hint'),
   stage: document.querySelector('#avatar-stage'),
-  videoA: document.querySelector('#avatar-video-a'),
-  videoB: document.querySelector('#avatar-video-b'),
+  videos: [...document.querySelectorAll('[data-avatar-video]')],
   mediaNote: document.querySelector('#media-note'),
   avatarName: document.querySelector('#avatar-name'),
   welcomeMessage: document.querySelector('#welcome-message'),
@@ -84,15 +83,26 @@ class AvatarVideoSwitcher {
   constructor({ stage, videos, onFallback }) {
     this.stage = stage;
     this.videos = videos;
+    this.videosByState = new Map(
+      videos.map((video) => [video.dataset.avatarVideo, video]),
+    );
     this.onFallback = onFallback;
     this.activeVideo = null;
     this.renderedState = null;
     this.desiredState = 'idle';
     this.states = DEFAULT_CONFIG.states;
     this.switchPromise = null;
+    this.loadJobs = new WeakMap();
     this.reduceMotion = window.matchMedia(
       '(prefers-reduced-motion: reduce)',
     ).matches;
+    const connection =
+      navigator.connection ??
+      navigator.mozConnection ??
+      navigator.webkitConnection;
+    this.allowPreload =
+      !connection?.saveData &&
+      !['slow-2g', '2g'].includes(connection?.effectiveType);
   }
 
   configure(states) {
@@ -130,12 +140,17 @@ class AvatarVideoSwitcher {
 
   async switchOnce(state) {
     const stateConfig = this.states[state] ?? DEFAULT_CONFIG.states[state];
-    const nextVideo = this.videos.find((video) => video !== this.activeVideo);
+    const nextVideo = this.videosByState.get(state);
+    if (!nextVideo) {
+      this.hideVideos();
+      this.onFallback(true);
+      return;
+    }
     const candidates = supportedSources(nextVideo, stateConfig.sources ?? []);
 
     let loaded = false;
     for (const source of candidates) {
-      loaded = await this.loadSource(nextVideo, source.src);
+      loaded = await this.ensureSource(nextVideo, source.src);
       if (loaded) {
         break;
       }
@@ -174,15 +189,62 @@ class AvatarVideoSwitcher {
         previousVideo.pause();
       }
     }
+
+    if (state === this.desiredState) {
+      const preloadState = {
+        idle: 'thinking',
+        thinking: 'speaking',
+      }[state];
+      if (preloadState) {
+        void this.preloadState(preloadState);
+      }
+    }
+  }
+
+  async preloadState(state) {
+    if (!this.allowPreload || this.reduceMotion) {
+      return;
+    }
+
+    const video = this.videosByState.get(state);
+    if (!video || video === this.activeVideo) {
+      return;
+    }
+
+    const stateConfig = this.states[state] ?? DEFAULT_CONFIG.states[state];
+    const candidates = supportedSources(video, stateConfig.sources ?? []);
+    for (const source of candidates) {
+      if (await this.ensureSource(video, source.src)) {
+        return;
+      }
+    }
+  }
+
+  ensureSource(video, source) {
+    if (
+      video.dataset.mediaSource === source &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    ) {
+      return Promise.resolve(true);
+    }
+
+    const existingJob = this.loadJobs.get(video);
+    if (existingJob?.source === source) {
+      return existingJob.promise;
+    }
+    return this.loadSource(video, source);
   }
 
   loadSource(video, source) {
+    this.loadJobs.get(video)?.cancel();
     video.pause();
     video.classList.remove('is-active');
     video.removeAttribute('src');
     video.load();
+    video.dataset.mediaSource = source;
 
-    return new Promise((resolve) => {
+    let cancel = () => {};
+    const loadingPromise = new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
         if (settled) {
@@ -192,11 +254,15 @@ class AvatarVideoSwitcher {
         clearTimeout(timeout);
         video.removeEventListener('loadeddata', handleLoaded);
         video.removeEventListener('error', handleError);
+        if (!result && video.dataset.mediaSource === source) {
+          delete video.dataset.mediaSource;
+        }
         resolve(result);
       };
       const handleLoaded = () => finish(true);
       const handleError = () => finish(false);
       const timeout = setTimeout(() => finish(false), 5_000);
+      cancel = () => finish(false);
 
       video.addEventListener('loadeddata', handleLoaded, { once: true });
       video.addEventListener('error', handleError, { once: true });
@@ -207,6 +273,19 @@ class AvatarVideoSwitcher {
         finish(true);
       }
     });
+
+    const job = {
+      source,
+      cancel: () => cancel(),
+      promise: null,
+    };
+    job.promise = loadingPromise.finally(() => {
+      if (this.loadJobs.get(video) === job) {
+        this.loadJobs.delete(video);
+      }
+    });
+    this.loadJobs.set(video, job);
+    return job.promise;
   }
 
   hideVideos() {
@@ -619,7 +698,7 @@ async function start() {
 
   runtime.videoSwitcher = new AvatarVideoSwitcher({
     stage: elements.stage,
-    videos: [elements.videoA, elements.videoB],
+    videos: elements.videos,
     onFallback: (fallback) => setMediaNote({ fallback }),
   });
   runtime.videoSwitcher.configure(runtime.config.states);

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mediaMode": "demo",
+  "mediaMode": "production",
   "characterName": "小未",
   "welcomeText": "你好，我是大未来数字助手小未。我会结合后台内容，通过大语言模型为你生成回答。",
   "presentationText": "大家好，欢迎来到大未来数字人问答体验。我会结合后台配置的内容，通过大语言模型生成自然、可播报的回答。",
@@ -10,12 +10,12 @@
       "hint": "等待你的问题",
       "sources": [
         {
-          "src": "/avatar-media/idle.mov",
+          "src": "/avatar-media/idle.mov?v=teacher-20260904",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/idle.webm",
+          "src": "/avatar-media/idle.webm?v=teacher-20260904",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -26,12 +26,12 @@
       "hint": "正在调用大语言模型",
       "sources": [
         {
-          "src": "/avatar-media/thinking.mov",
+          "src": "/avatar-media/thinking.mov?v=teacher-20260904",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/thinking.webm",
+          "src": "/avatar-media/thinking.webm?v=teacher-20260904",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -42,12 +42,12 @@
       "hint": "答案播报中",
       "sources": [
         {
-          "src": "/avatar-media/speaking.mov",
+          "src": "/avatar-media/speaking.mov?v=teacher-20260904",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/speaking.webm",
+          "src": "/avatar-media/speaking.webm?v=teacher-20260904",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -58,12 +58,12 @@
       "hint": "正在进行开场介绍",
       "sources": [
         {
-          "src": "/avatar-media/presenting.mov",
+          "src": "/avatar-media/presenting.mov?v=teacher-20260904",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/presenting.webm",
+          "src": "/avatar-media/presenting.webm?v=teacher-20260904",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
