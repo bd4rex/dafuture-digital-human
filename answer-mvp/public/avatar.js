@@ -1,7 +1,7 @@
 import { AvatarFlow, AVATAR_STATES } from './avatar-flow.js';
 
 const DEFAULT_CONFIG = Object.freeze({
-  characterName: '小未',
+  characterName: '大未来',
   welcomeText: '你好，我是大未来数字助手。请问有什么可以帮你？',
   presentationText: '大家好，欢迎来到大未来数字人问答体验。',
   speech: {
@@ -919,7 +919,7 @@ function appendMessage(role, text, options = {}) {
     const avatar = document.createElement('span');
     avatar.className = 'message-avatar';
     avatar.setAttribute('aria-hidden', 'true');
-    avatar.textContent = '未';
+    avatar.textContent = runtime.config.characterName.slice(0, 1) || '大';
     article.append(avatar);
   }
 
