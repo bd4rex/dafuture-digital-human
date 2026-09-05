@@ -122,3 +122,10 @@
 - Task: remove the “administration sign-in must originate from a same-origin page” restriction for the demo workflow.
 - Implementation: `POST /api/admin/login` no longer compares the request `Origin` with the server `Host`; first-time password setup and later sign-in can both originate from a different page origin. Password verification, sign-in rate limiting, HttpOnly/SameSite sessions, and same-origin enforcement on post-login management APIs remain in place.
 - Verification: automated coverage uses mismatched `Origin` and `Host` values to confirm that an incorrect password still returns 401, the correct password signs in and issues a secure session, and cross-origin management requests after sign-in remain rejected.
+
+## 2026-09-06 07:34 +0800
+
+- Task: remove the remaining same-origin restriction from administration sessions for the demo and delete the space-heavy headline at the top of Dialogue mode.
+- Access change: removed the shared administration authorization check that compared `Origin` with `Host`, including the `ADMIN_ORIGIN_REJECTED` branch. An authenticated session can now use content, knowledge, model, Hosting control, and operations-log APIs across origins. Password checks, sign-in rate limiting, session expiration, and server-side authorization remain in place.
+- UI change: removed the “Give business content to the LLM...” headline and tightened the surrounding vertical spacing. The measured desktop intro height dropped from 216 px to 157 px.
+- Verification: all 37 automated tests passed. An isolated HTTP service accepted mismatched `Origin` and `Host` values for sign-in, content access, and a Hosting-mode change, returning HTTP 200 with `session` access. A real-browser pass confirmed that the headline is absent, no horizontal overflow exists, and the console has zero errors or warnings.

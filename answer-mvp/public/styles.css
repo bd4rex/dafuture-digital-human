@@ -595,7 +595,7 @@ main {
   grid-template-columns: minmax(0, 1fr) minmax(440px, 0.62fr);
   gap: clamp(30px, 6vw, 96px);
   align-items: end;
-  padding: clamp(44px, 7vw, 84px) 0 36px;
+  padding: clamp(24px, 4vw, 44px) 0 28px;
 }
 
 .eyebrow,
@@ -609,18 +609,9 @@ main {
   text-transform: uppercase;
 }
 
-.intro h1 {
-  max-width: 820px;
-  margin: 0;
-  font-size: clamp(32px, 4.2vw, 62px);
-  font-weight: 760;
-  letter-spacing: -0.045em;
-  line-height: 1.12;
-}
-
 .intro-copy {
   max-width: 760px;
-  margin: 20px 0 0;
+  margin: 8px 0 0;
   color: var(--ink-soft);
   font-size: clamp(15px, 1.4vw, 18px);
   line-height: 1.75;

@@ -245,6 +245,7 @@ test('管理页面需登录，登录后提供内容、知识库与模型设置',
   assert.match(response.body, /主持模式/);
   assert.match(response.body, /保存并播报到前台/);
   assert.match(response.body, /运维日志/);
+  assert.doesNotMatch(response.body, /把业务内容交给大模型/);
   assert.doesNotMatch(response.body, /资料来源/);
 });
 
@@ -808,7 +809,7 @@ test('外部文件修改不会被 Web 保存静默覆盖', async (t) => {
   );
 });
 
-test('内容、模型和主持控制接口均要求登录且拒绝跨源会话', async (t) => {
+test('后台接口要求登录，但已登录会话不限制页面来源', async (t) => {
   const { app } = await createTestApp(t);
   for (const url of [
     '/api/content',
@@ -829,9 +830,22 @@ test('内容、模型和主持控制接口均要求登录且拒绝跨源会话',
         origin: 'https://untrusted.example',
       },
     });
-    assert.equal(response.statusCode, 403);
-    assert.equal(response.json().error, 'ADMIN_ORIGIN_REJECTED');
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().accessMode, 'session');
   }
+
+  const modeChange = await adminInject(app, {
+    method: 'POST',
+    url: '/api/live-control/mode',
+    headers: {
+      host: '127.0.0.1',
+      origin: 'https://untrusted.example',
+    },
+    payload: { mode: 'hosting' },
+  });
+  assert.equal(modeChange.statusCode, 200, modeChange.body);
+  assert.equal(modeChange.json().mode, 'hosting');
+  assert.equal(modeChange.json().accessMode, 'session');
 });
 
 test('设置管理密钥后后台接口仍支持 Bearer 认证', async (t) => {

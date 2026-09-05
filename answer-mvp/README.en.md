@@ -240,7 +240,7 @@ To use the workbench from another computer on a campus network or from a server,
 HOST=0.0.0.0 npm start
 ```
 
-Open the administration page once to create the password, then use it to sign in. First-time setup and sign-in do not validate the page origin; session-backed management APIs still enforce same-origin checks after sign-in. `ADMIN_PASSWORD` remains an optional preset, not a requirement for remote access. It is separate from the model provider's API key. Configure `ADMIN_API_KEY` separately only when an automated client needs Bearer access.
+Open the administration page once to create the password, then use it to sign in. First-time setup, sign-in, and all authenticated administration APIs do not validate the page origin. `ADMIN_PASSWORD` remains an optional preset, not a requirement for remote access. It is separate from the model provider's API key. Configure `ADMIN_API_KEY` separately only when an automated client needs Bearer access.
 
 Before exposing the service publicly, an existing gateway should also provide HTTPS, rate limiting, and an appropriate access-log policy.
 
@@ -260,7 +260,7 @@ Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, 
 npm test
 ```
 
-The committed 37 tests cover first-time password setup, cross-origin sign-in, logout, salted hashes, same-origin enforcement on post-login management APIs, operations-log persistence/filtering/download/redaction/rotation, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
+The committed 37 tests cover first-time password setup, cross-origin sign-in and administration, logout, salted hashes, operations-log persistence/filtering/download/redaction/rotation, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
 
 ## Docker
 

@@ -1052,19 +1052,6 @@ function bearerTokenMatches(header, expectedKey) {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
-function isSameOriginRequest(request) {
-  const origin = request.headers.origin;
-  if (!origin) {
-    return true;
-  }
-
-  try {
-    return new URL(origin).host === request.headers.host;
-  } catch {
-    return false;
-  }
-}
-
 function integerSetting(value, fallback, { name, minimum, maximum }) {
   if (value === undefined || value === null || value === '') {
     return fallback;
@@ -1550,12 +1537,6 @@ export async function buildApp(options = {}) {
     }
 
     if (adminAuthStore.hasValidSession(request)) {
-      if (!isSameOriginRequest(request)) {
-        return reply.code(403).send({
-          error: 'ADMIN_ORIGIN_REJECTED',
-          message: '管理会话只允许从同源页面使用。',
-        });
-      }
       request.adminAccessMode = 'session';
       return;
     }
