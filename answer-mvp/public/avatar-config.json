@@ -68,12 +68,12 @@
       "hint": "答案播报中",
       "sources": [
         {
-          "src": "/avatar-media/speaking.mov?v=teacher-20260904",
+          "src": "/avatar-media/speaking.mov?v=dialogue-mouth-20260905",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/speaking.webm?v=teacher-20260904",
+          "src": "/avatar-media/speaking.webm?v=dialogue-mouth-20260905",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }

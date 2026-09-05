@@ -13,10 +13,11 @@ The frontend loads the four poses using these fixed filenames:
 
 The four current media sets contain the production digital-human identity. Their masters were 1080×1440, 30 fps QTRLE Alpha MOV files. Web delivery copies are 720×960 at 30 fps, while the lossless masters remain outside this project directory.
 
-- Chromium and Edge use VP9 Alpha WebM; all four clips total about 5.4 MB.
-- Safari uses HEVC Alpha MOV; all four clips total about 9.8 MB.
+- Chromium and Edge use VP9 Alpha WebM; all four clips total about 6.1 MB.
+- Safari uses HEVC Alpha MOV; all four clips total about 9.9 MB.
 - Each state keeps its own `<video>` buffer. The page loads idle first; on networks without data saving enabled it then preloads thinking, and entering thinking preloads speaking. Presenting remains on demand. Loaded clips stay in their own layers, so repeated state switches do not download them again.
 - The thinking master ended in a different pose from its first frame. Its delivery copy plays the first 3.9 seconds forward and backward to avoid a visible hand-position jump at the loop boundary.
+- The original dialogue master only smiles, blinks, and turns slightly, with almost no visible mouth opening, so it is easily confused with idle. The current `speaking.webm` and `speaking.mov` temporarily reuse the presenting clip with clearer mouth movement, while remaining controlled by the independent `speaking` state and audio events. Rebuild these two files when a new dialogue master is available; rebuilding from the old dialogue master will overwrite this temporary correction.
 
 Media recommendations:
 
