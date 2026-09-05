@@ -258,6 +258,15 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.match(pageResponse.body, /id="live-mode-pill"/);
   assert.match(pageResponse.body, /后台主持控制已接管/);
   assert.doesNotMatch(pageResponse.body, /主持开场/);
+  assert.match(
+    pageResponse.body,
+    /<h1 id="conversation-title">有什么想了解的？<\/h1>/,
+  );
+  assert.match(
+    pageResponse.body,
+    /<div class="conversation-log" id="conversation-log"[^>]*><\/div>/,
+  );
+  assert.doesNotMatch(pageResponse.body, /你好，我是大未来数字助手/);
   assert.equal((pageResponse.body.match(/data-avatar-video=/g) ?? []).length, 4);
   assert.doesNotMatch(pageResponse.body, /资料来源/);
 
@@ -268,6 +277,8 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.equal(configResponse.statusCode, 200);
   const avatarConfig = configResponse.json();
   assert.equal(avatarConfig.mediaMode, 'production');
+  assert.equal(avatarConfig.characterName, '大未来');
+  assert.equal(Object.hasOwn(avatarConfig, 'welcomeText'), false);
   assert.equal(avatarConfig.speech.provider, 'browser');
   assert.equal(avatarConfig.speech.gender, 'male');
   assert.equal(avatarConfig.speech.preferredVoiceNames[0], 'Reed');

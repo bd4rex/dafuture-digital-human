@@ -2,7 +2,6 @@ import { AvatarFlow, AVATAR_STATES } from './avatar-flow.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   characterName: '大未来',
-  welcomeText: '你好，我是大未来数字助手。请问有什么可以帮你？',
   presentationText: '大家好，欢迎来到大未来数字人问答体验。',
   speech: {
     provider: 'browser',
@@ -56,7 +55,6 @@ const elements = {
   videos: [...document.querySelectorAll('[data-avatar-video]')],
   mediaNote: document.querySelector('#media-note'),
   avatarName: document.querySelector('#avatar-name'),
-  welcomeMessage: document.querySelector('#welcome-message'),
   conversationLog: document.querySelector('#conversation-log'),
   quickQuestions: document.querySelector('#quick-question-list'),
   questionForm: document.querySelector('#question-form'),
@@ -65,7 +63,6 @@ const elements = {
   sendButton: document.querySelector('#send-button'),
   composerHint: document.querySelector('#composer-hint'),
   conversationTitle: document.querySelector('#conversation-title'),
-  conversationDescription: document.querySelector('#conversation-description'),
   hostingBanner: document.querySelector('#hosting-banner'),
   hostingScriptTitle: document.querySelector('#hosting-script-title'),
   hostingScriptPreview: document.querySelector('#hosting-script-preview'),
@@ -620,7 +617,6 @@ async function loadConfig(fallback = DEFAULT_CONFIG) {
 function applyConfig(config) {
   runtime.config = config;
   elements.avatarName.textContent = config.characterName;
-  elements.welcomeMessage.textContent = config.welcomeText;
   runtime.videoSwitcher?.configure(config.states);
   runtime.voiceInput?.configure(config.speechInput);
   setMediaNote();
@@ -668,14 +664,10 @@ function updateInteractionAvailability() {
 
   if (hosting) {
     elements.conversationTitle.textContent = '主持模式已开启';
-    elements.conversationDescription.textContent =
-      '内容由后台主持人确定并实时下发，不经过大语言模型改写。';
     elements.composerHint.textContent =
       '主持模式由后台控制播报，现场提问已暂停';
   } else {
     elements.conversationTitle.textContent = '有什么想了解的？';
-    elements.conversationDescription.textContent =
-      '我会结合后台内容，由大语言模型生成并播报答案。';
     if (!runtime.voiceInput?.active) {
       elements.composerHint.textContent = DEFAULT_COMPOSER_HINT;
     }
