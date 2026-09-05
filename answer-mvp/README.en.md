@@ -2,7 +2,7 @@
 
 # “Da Future” LLM Digital Human Q&A MVP
 
-This is a runnable dual-mode prototype. Dialogue mode sends visitor questions, manual Q&A, and imported knowledge to a configured large language model. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
+This is a runnable dual-mode prototype. Dialogue mode sends visitor questions, manual knowledge entries, and imported file knowledge to a configured large language model. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
 
 The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, and system prompt can all be configured in the web workbench.
 
@@ -17,7 +17,7 @@ npm start
 
 By default, the service listens only on `http://127.0.0.1:8080`:
 
-- `http://127.0.0.1:8080/`: live mode control, content, knowledge, and model workbench.
+- `http://127.0.0.1:8080/`: live mode control, manual knowledge, file knowledge, and model workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
 - `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
@@ -26,7 +26,7 @@ The first visit to the administration page asks you to create an administration 
 
 ## Administrator Sign-In
 
-- Before sign-in, `/` serves only the password page. Manual content, knowledge-library, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
+- Before sign-in, `/` serves only the password page. Manual-knowledge, file-knowledge, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
 - Without a preset password, the first visitor can create it directly without an address or page-origin restriction; local, LAN, and Docker access use the same flow.
 - A password created through the page is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
 - Successful sign-in creates an HttpOnly, SameSite=Strict cookie. The session expires after eight hours by default and is invalidated by logout or service restart.
@@ -57,10 +57,10 @@ For a local run, the default path is `answer-mvp/model-config.json`. Docker uses
 
 The model settings provide two modes:
 
-- `Use managed content only`: the model may answer only from manual Q&A and imported knowledge files. When the available material is insufficient, it returns “No relevant information is currently available in the managed content.”
+- `Use managed content only`: the model may answer only from manual knowledge and imported file knowledge. When the available material is insufficient, it returns “No relevant information is currently available in the managed content.”
 - `Allow general knowledge`: the model prioritizes managed content and may supplement it with general knowledge, but must not invent project-specific dates, locations, fees, people, or rules.
 
-In both modes, manual Q&A and imported knowledge files are model context rather than final answers returned directly by the API.
+In both modes, manual knowledge and file knowledge are model context rather than final answers returned directly by the API.
 
 ## Web Workbench
 
@@ -79,7 +79,7 @@ Select “Operations Logs” in the header to filter recent execution records by
 
 - Service initialization, listening, and shutdown.
 - Administration-password setup, successful/failed sign-in, rate limiting, and logout.
-- Manual-content saves, knowledge import/delete/download, model-setting saves, and connection tests.
+- Manual-knowledge saves, file-knowledge import/delete/download, model-setting saves, and connection tests.
 - Dialogue/Hosting mode switches, hosting-script saves, presentation dispatch, and stop commands.
 - Successful, rejected, and failed Q&A calls.
 
@@ -87,12 +87,12 @@ Each entry includes time, action, request ID, route, actor type, client IP, HTTP
 
 Logs are written to `operations.jsonl` with `0600` permissions. The default retention is 5 MB per file and three files including the current file. The UI exposes only the filename, never the server's absolute path. A presentation log's `connectedClients` is the number of frontends connected when the server dispatched the command; it is not proof that a client speaker completed playback.
 
-The content area supports:
+The Knowledge Management area supports:
 
-- Creating, editing, copying, sorting, deleting, and searching knowledge entries.
-- Adding multiple user phrasings, keywords, and confirmed content to each entry.
+- Creating, editing, copying, sorting, deleting, and searching manual knowledge entries.
+- Adding applicable questions, retrieval keywords, and knowledge content to each entry.
 - Saving the complete `content.json` file so later model answers use the new content immediately.
-- Validating required fields, duplicate content IDs, and duplicate question phrasings.
+- Validating required fields, duplicate knowledge IDs, and duplicate question phrasings.
 - Using a revision and disk hash to prevent concurrent changes from being silently overwritten.
 - Calling the active model from the right-hand panel to test Q&A directly.
 
@@ -103,13 +103,13 @@ The model area supports:
 - Editing the system prompt.
 - Testing the model connection explicitly.
 
-### Imported Knowledge Library
+### File Knowledge
 
-Select “Knowledge Library” in the header to:
+Select “File Knowledge” in the header to:
 
 - Import UTF-8 TXT, Markdown, CSV, and JSON files, plus DOCX and text-based PDFs. Scanned PDFs require OCR first.
 - Review selected filenames and sizes before submission. Each request accepts up to 10 files, 10 MB per file, and 30 MB in total.
-- Append while skipping identical SHA-256 content, or replace the complete imported-file collection without changing manual Q&A entries.
+- Append while skipping identical SHA-256 content, or replace the complete imported-file collection without changing manual knowledge entries.
 - Preview extracted text, download the preserved original, or delete one document and all its chunks.
 - Persist extracted chunks in `knowledge.json` and originals in `knowledge-files/`; both live under Docker's `/data` volume.
 
@@ -204,7 +204,7 @@ Questions are limited to 500 characters. Use `CORS_ORIGIN` to restrict the permi
 
 The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-control endpoints use the same administrator-session protection.
 
-### Knowledge Library Endpoints
+### File Knowledge Endpoints
 
 - `GET /api/knowledge`: list imported document metadata, extraction previews, and the active revision.
 - `POST /api/knowledge/import`: upload `files` as `multipart/form-data`; `mode` is `append` or `replace`.
@@ -252,7 +252,7 @@ The web workbench is recommended, but the file can also be edited directly. By d
 - When the new file is invalid, the previous valid content remains active and health status changes to `degraded`.
 - Health status returns to `ready` after the file is corrected.
 
-Each entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. Here, `answer` is confirmed material supplied to the model as context.
+Each manual-knowledge entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. The UI labels these as Knowledge ID, Applicable Questions, Retrieval Keywords, and Knowledge Content; the underlying fields stay unchanged so existing `content.json` files remain compatible.
 
 ## Automated Tests
 
@@ -272,7 +272,7 @@ docker run --rm -p 8080:8080 \
   dafuture-answer-mvp
 ```
 
-Open the administration page after startup to create the password. The named volume persists manual content, hosting scripts, operations logs, model configuration, the administration-password hash, the knowledge index, and imported originals. Never export a volume containing a real key or runtime logs to a public location.
+Open the administration page after startup to create the password. The named volume persists manual knowledge, hosting scripts, operations logs, model configuration, the administration-password hash, the file-knowledge index, and imported originals. Never export a volume containing a real key or runtime logs to a public location.
 
 ## Environment Variables
 

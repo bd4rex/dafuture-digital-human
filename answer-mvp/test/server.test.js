@@ -224,7 +224,7 @@ async function waitUntil(assertion, timeoutMs = 1_500) {
   throw lastError ?? new Error('等待条件超时');
 }
 
-test('管理页面需登录，登录后提供内容、知识库与模型设置', async (t) => {
+test('管理页面需登录，登录后提供知识库管理、主持控制与模型设置', async (t) => {
   const { app } = await createTestApp(t);
   const loginPage = await app.inject({ method: 'GET', url: '/' });
 
@@ -238,13 +238,16 @@ test('管理页面需登录，登录后提供内容、知识库与模型设置',
   assert.match(response.headers['content-type'], /text\/html/);
   assert.match(response.body, /数字人内容工作台/);
   assert.match(response.body, /模型设置/);
-  assert.match(response.body, /知识库/);
+  assert.match(response.body, /知识库管理/);
+  assert.match(response.body, /人工知识/);
+  assert.match(response.body, /文件知识/);
   assert.match(response.body, /API Key/);
   assert.match(response.body, /保存全部更改/);
   assert.match(response.body, /对话模式/);
   assert.match(response.body, /主持模式/);
   assert.match(response.body, /保存并播报到前台/);
   assert.match(response.body, /运维日志/);
+  assert.doesNotMatch(response.body, /问答条目/);
   assert.doesNotMatch(response.body, /把业务内容交给大模型/);
   assert.doesNotMatch(response.body, /资料来源/);
 });

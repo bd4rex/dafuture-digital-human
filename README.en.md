@@ -26,7 +26,7 @@ npm start
 
 By default, the service listens only on the local machine:
 
-- `http://127.0.0.1:8080/`: dual-mode control, content, knowledge, and model workbench.
+- `http://127.0.0.1:8080/`: dual-mode control, manual knowledge, file knowledge, and model workbench.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: service diagnostics and dependency state.
 - `http://127.0.0.1:8080/ready`: Q&A readiness check.
@@ -35,12 +35,12 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 
 ## Core Capabilities
 
-- Maintain question phrasings, keywords, and confirmed business knowledge in `content.json`.
+- Maintain manual knowledge in “Knowledge Management”; applicable questions, retrieval keywords, and knowledge content remain compatible with `content.json`.
 - Import TXT, Markdown, CSV, JSON, DOCX, and PDF files through the web UI, preserving originals and a persistent chunk index.
 - Configure an OpenAI-compatible API URL, API key, model name, prompt, and answer scope in the web workbench.
 - Send a user question and managed content to the model through `POST /answer`.
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
-- Diagnose sign-in, content, knowledge, model, hosting-control, and Q&A actions through the operations-log viewer.
+- Diagnose sign-in, manual-knowledge, file-knowledge, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
 - Allow first-time setup, sign-in, and all authenticated administration APIs from any page origin while retaining server-verified passwords, HttpOnly sessions, and optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.

@@ -692,8 +692,8 @@ function renderList() {
     const empty = document.createElement('p');
     empty.className = 'list-empty';
     empty.textContent = state.items.length
-      ? '没有找到匹配内容，换个关键词试试。'
-      : '还没有问答内容。点击右上角“＋”新建第一条。';
+      ? '没有找到匹配的人工知识，换个关键词试试。'
+      : '还没有人工知识。点击右上角“＋”新建第一条。';
     elements.itemList.append(empty);
   }
 
@@ -707,11 +707,11 @@ function renderList() {
 
     const title = document.createElement('span');
     title.className = 'content-item-title';
-    title.textContent = item.questions[0] || '未填写标准问题';
+    title.textContent = item.questions[0] || '未填写适用问题';
 
     const meta = document.createElement('span');
     meta.className = 'content-item-meta';
-    meta.textContent = item.id || '尚未填写内容 ID';
+    meta.textContent = item.id || '尚未填写知识 ID';
 
     button.append(title, meta);
     button.addEventListener('click', () => {
@@ -722,7 +722,7 @@ function renderList() {
     elements.itemList.append(button);
   }
 
-  elements.visibleCount.textContent = `${visibleItems.length} 条内容`;
+  elements.visibleCount.textContent = `${visibleItems.length} 条知识`;
   elements.contentCount.textContent = String(state.items.length);
 }
 
@@ -854,7 +854,7 @@ function duplicateItem() {
     return;
   }
 
-  const firstQuestion = item.questions[0] || '新问答';
+  const firstQuestion = item.questions[0] || '新知识';
   const duplicate = {
     id: createUniqueId(`${item.id || 'faq'}-copy`),
     questions: [`${firstQuestion}（副本）`],
@@ -910,10 +910,10 @@ function validateItems() {
 
   for (const [index, item] of state.items.entries()) {
     if (!item.id.trim()) {
-      return { index, field: 'id', message: '请填写内容 ID。' };
+      return { index, field: 'id', message: '请填写知识 ID。' };
     }
     if (ids.has(item.id.trim())) {
-      return { index, field: 'id', message: `内容 ID 与第 ${ids.get(item.id.trim()) + 1} 条重复。` };
+      return { index, field: 'id', message: `知识 ID 与第 ${ids.get(item.id.trim()) + 1} 条重复。` };
     }
     ids.set(item.id.trim(), index);
 
@@ -921,10 +921,10 @@ function validateItems() {
       return { index, field: 'questions', message: '请至少填写一种用户问法。' };
     }
     if (!item.keywords.length) {
-      return { index, field: 'keywords', message: '请至少填写一个匹配关键词。' };
+      return { index, field: 'keywords', message: '请至少填写一个检索关键词。' };
     }
     if (!item.answer.trim()) {
-      return { index, field: 'answer', message: '请填写已确认内容。' };
+      return { index, field: 'answer', message: '请填写知识内容。' };
     }
 
     for (const question of item.questions) {
@@ -1055,8 +1055,8 @@ function formatDate(value) {
 const OPS_CATEGORY_LABELS = Object.freeze({
   system: '系统',
   auth: '登录认证',
-  content: '手工内容',
-  knowledge: '知识库',
+  content: '人工知识',
+  knowledge: '文件知识',
   model: '模型',
   live: '主持控制',
   question: '数字人问答',
@@ -1308,7 +1308,7 @@ function renderKnowledgeDocuments() {
   if (documents.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'knowledge-list-empty';
-    empty.textContent = '尚未导入外部知识文件。';
+    empty.textContent = '尚未导入文件知识。';
     elements.knowledgeDocumentList.append(empty);
     return;
   }
@@ -1429,7 +1429,7 @@ async function importKnowledgeFiles(event) {
 
   const mode = selectedKnowledgeMode();
   if (mode === 'replace' && !elements.replaceConfirm.checked) {
-    elements.knowledgeMessage.textContent = '请先确认替换现有外部知识文件。';
+    elements.knowledgeMessage.textContent = '请先确认替换现有文件知识。';
     elements.replaceConfirm.focus();
     return;
   }
@@ -1488,7 +1488,7 @@ async function deleteKnowledgeDocument(knowledgeDocument) {
     setKnowledgeSnapshot(snapshot);
     elements.knowledgeMessage.textContent = `已删除“${knowledgeDocument.filename}”。`;
     elements.knowledgeMessage.classList.add('success');
-    showToast('知识文件已删除。');
+    showToast('文件知识已删除。');
   } catch (error) {
     elements.knowledgeMessage.textContent = error.message;
     elements.knowledgeMessage.classList.remove('success');

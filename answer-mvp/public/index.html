@@ -23,7 +23,7 @@
           打开数字人前台
         </a>
         <button class="button button-secondary" id="open-knowledge-dialog" type="button">
-          知识库
+          文件知识
         </button>
         <button class="button button-secondary" id="open-model-dialog" type="button">
           模型设置
@@ -55,11 +55,11 @@
       </nav>
 
       <section class="mode-panel" id="dialogue-panel" role="tabpanel" aria-labelledby="dialogue-tab">
-      <section class="intro" aria-label="对话内容管理">
+      <section class="intro" aria-label="知识库管理">
         <div>
           <p class="eyebrow">CONTENT WORKBENCH · MVP</p>
           <p class="intro-copy">
-            在这里维护问答条目，或将外部文件导入持久化知识库，再通过“模型设置”接入 OpenAI 兼容 API。保存后，模型会立即使用新内容组织答案。
+            在这里维护人工知识，或导入外部文件知识，再通过“模型设置”接入 OpenAI 兼容 API。保存后，大模型会立即使用知识库中的最新内容组织回答。
           </p>
         </div>
 
@@ -69,11 +69,11 @@
             <dd><span class="status-dot" id="status-dot"></span><span id="service-status">连接中</span></dd>
           </div>
           <div>
-            <dt>手工条目</dt>
+            <dt>人工知识</dt>
             <dd id="content-count">—</dd>
           </div>
           <div>
-            <dt>知识文件</dt>
+            <dt>文件知识</dt>
             <dd id="knowledge-count">—</dd>
           </div>
           <div>
@@ -87,69 +87,69 @@
         </dl>
       </section>
 
-      <section class="workspace" aria-label="内容配置工作区">
+      <section class="workspace" aria-label="知识库管理工作区">
         <aside class="panel library-panel">
           <div class="panel-heading">
             <div>
-              <p class="section-kicker">内容目录</p>
-              <h2>问答条目</h2>
+              <p class="section-kicker">知识库管理</p>
+              <h2>人工知识</h2>
             </div>
-            <button class="icon-button" id="add-item" type="button" aria-label="新增问答内容" title="新增问答内容">
+            <button class="icon-button" id="add-item" type="button" aria-label="新增人工知识" title="新增人工知识">
               <span aria-hidden="true">＋</span>
             </button>
           </div>
 
           <label class="search-field" for="content-search">
-            <span class="visually-hidden">搜索问答内容</span>
+            <span class="visually-hidden">搜索人工知识</span>
             <span aria-hidden="true">⌕</span>
-            <input id="content-search" type="search" placeholder="搜索问题、关键词或已确认内容">
+            <input id="content-search" type="search" placeholder="搜索适用问题、关键词或知识内容">
           </label>
 
-          <div class="item-list" id="item-list" role="listbox" aria-label="问答内容列表"></div>
+          <div class="item-list" id="item-list" role="listbox" aria-label="人工知识列表"></div>
 
           <div class="library-footer">
-            <span id="visible-count">0 条内容</span>
+            <span id="visible-count">0 条知识</span>
             <span>存储于 content.json</span>
           </div>
         </aside>
 
         <section class="panel editor-panel" aria-labelledby="editor-title">
           <div class="empty-state" id="empty-state">
-            <span class="empty-mark" aria-hidden="true">问</span>
-            <h2>选择一条内容开始编辑</h2>
-            <p>也可以点击左侧的“＋”新建标准问答。</p>
+            <span class="empty-mark" aria-hidden="true">知</span>
+            <h2>选择一条人工知识开始编辑</h2>
+            <p>也可以点击左侧的“＋”新建知识条目。</p>
           </div>
 
           <form id="content-form" class="content-form" hidden novalidate>
             <div class="panel-heading editor-heading">
               <div>
-                <p class="section-kicker">内容编辑</p>
-                <h2 id="editor-title">问答配置</h2>
+                <p class="section-kicker">人工知识编辑</p>
+                <h2 id="editor-title">知识条目配置</h2>
               </div>
               <span class="record-position" id="record-position"></span>
             </div>
 
             <div class="form-grid">
               <label class="field field-wide">
-                <span class="field-label">内容 ID <b>必填</b></span>
+                <span class="field-label">知识 ID <b>必填</b></span>
                 <input id="field-id" name="id" maxlength="100" autocomplete="off" required>
                 <small>供系统识别，建议使用英文、数字和短横线。</small>
               </label>
 
               <label class="field field-wide">
-                <span class="field-label">用户可能提出的问法 <b>必填</b></span>
+                <span class="field-label">适用问题 <b>必填</b></span>
                 <textarea id="field-questions" name="questions" rows="5" maxlength="5000" placeholder="这个项目是什么？&#10;请介绍一下这个项目&#10;这个项目主要做什么？" required></textarea>
-                <small>每行填写一种问法；第一行作为列表中的标准问题。</small>
+                <small>每行填写一种可能问法；第一行作为列表标题和快捷测试问题。</small>
               </label>
 
               <label class="field field-wide">
-                <span class="field-label">匹配关键词 <b>必填</b></span>
+                <span class="field-label">检索关键词 <b>必填</b></span>
                 <input id="field-keywords" name="keywords" maxlength="1000" placeholder="项目，大未来，介绍" required>
                 <small>使用中文或英文逗号分隔，也可换行。</small>
               </label>
 
               <label class="field field-wide">
-                <span class="field-label">已确认内容 <b>必填</b></span>
+                <span class="field-label">知识内容 <b>必填</b></span>
                 <textarea id="field-answer" name="answer" rows="8" maxlength="10000" placeholder="填写希望大模型参考的业务事实、规则或回答要点。" required></textarea>
                 <small><span id="answer-length">0</span> / 10000 字；不要填写 XXX、XX 或尚未确认的日期和地点。</small>
               </label>
@@ -177,7 +177,7 @@
             <span class="live-badge">LIVE</span>
           </div>
 
-          <p class="tester-copy">输入前台或数字人可能收到的问题，查看大模型结合当前内容生成的回答。</p>
+          <p class="tester-copy">输入前台或数字人可能收到的问题，查看大模型结合当前知识库生成的回答。</p>
 
           <form id="tester-form" class="tester-form">
             <label class="field">
@@ -187,7 +187,7 @@
             <button class="button button-dark" id="test-submit" type="submit">测试回答</button>
           </form>
 
-          <div class="quick-questions" id="quick-questions" aria-label="当前内容的快捷测试问题"></div>
+          <div class="quick-questions" id="quick-questions" aria-label="当前知识的快捷测试问题"></div>
 
           <section class="answer-card answer-empty" id="answer-card" aria-live="polite">
             <p class="answer-label">回答结果</p>
@@ -300,13 +300,13 @@
         <div class="dialog-heading">
           <div>
             <p class="section-kicker">PERSISTENT KNOWLEDGE</p>
-            <h2>知识库文件</h2>
+            <h2>文件知识</h2>
           </div>
           <button class="dialog-close" id="close-knowledge-dialog" aria-label="关闭" type="button">×</button>
         </div>
         <p>导入后会保存原文件和提取后的知识片段，服务重启后仍然有效。支持 TXT、Markdown、CSV、JSON、DOCX 和 PDF。</p>
 
-        <section class="knowledge-summary" aria-label="知识库摘要">
+        <section class="knowledge-summary" aria-label="文件知识摘要">
           <div><strong id="knowledge-document-count">0</strong><span>已导入文件</span></div>
           <div><strong id="knowledge-chunk-count">0</strong><span>可检索片段</span></div>
           <div><strong id="knowledge-storage-state">读取中</strong><span>持久化状态</span></div>
@@ -333,7 +333,7 @@
         </fieldset>
         <label class="replace-confirm" id="replace-confirm-row" hidden>
           <input id="replace-confirm" type="checkbox">
-          <span>我已确认要替换现有外部知识文件。手工问答条目不受影响。</span>
+          <span>我已确认要替换现有文件知识。人工知识不受影响。</span>
         </label>
 
         <p class="dialog-message" id="knowledge-message"></p>
@@ -455,8 +455,8 @@
               <option value="">全部类别</option>
               <option value="system">系统</option>
               <option value="auth">登录认证</option>
-              <option value="content">手工内容</option>
-              <option value="knowledge">知识库</option>
+              <option value="content">人工知识</option>
+              <option value="knowledge">文件知识</option>
               <option value="model">模型</option>
               <option value="live">主持控制</option>
               <option value="question">数字人问答</option>
