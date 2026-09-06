@@ -6,8 +6,9 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 
 ## Current Status
 
-- Application version: `0.5.0`.
+- Application version: `0.6.0`.
 - The password-protected workbench now controls two live modes: Dialogue uses the configured LLM and persistent knowledge, while Hosting broadcasts a selected prepared script verbatim from the administration page.
+- Model settings now separate answer style, insufficient-knowledge copy, and service-error copy. The model composes normal answers, while the server returns predictable, speech-ready fallback text.
 - Hosting scripts persist on the server. Mode, present, and stop commands synchronize to every open avatar frontend through SSE; a new command interrupts the previous script, while a service restart does not replay it.
 - Persistent operations logs record key action outcomes, response codes, execution times, and safe diagnostic metadata, with authenticated filtering and download in the workbench.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
@@ -37,14 +38,14 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 
 - Maintain manual knowledge in “Knowledge Management”; applicable questions, retrieval keywords, and knowledge content remain compatible with `content.json`.
 - Import TXT, Markdown, CSV, JSON, DOCX, and PDF files through the web UI, preserving originals and a persistent chunk index.
-- Configure an OpenAI-compatible API URL, API key, model name, prompt, and answer scope in the web workbench.
+- Configure an OpenAI-compatible API URL, API key, model name, answer scope, natural-response guidance, and two fallback messages in the web workbench.
 - Send a user question and managed content to the model through `POST /answer`.
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
 - Diagnose sign-in, manual-knowledge, file-knowledge, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
 - Allow first-time setup, sign-in, and all authenticated administration APIs from any page origin while retaining server-verified passwords, HttpOnly sessions, and optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
-- Sanitize upstream model errors so API keys and upstream details are not exposed to the frontend.
+- Sanitize upstream model errors and replace technical details with speech-ready service fallback copy, without exposing API keys or upstream details.
 
 ## Repository Layout
 

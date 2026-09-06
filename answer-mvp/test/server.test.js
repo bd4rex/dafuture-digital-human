@@ -6,9 +6,10 @@ import test from 'node:test';
 
 import {
   buildApp,
+  DEFAULT_ANSWER_STYLE,
   HOSTING_MODE_TEXT,
-  MODEL_NOT_CONFIGURED_TEXT,
   NO_ANSWER_TEXT,
+  SERVICE_ERROR_TEXT,
 } from '../server.js';
 import { KnowledgeStore, parseKnowledgeFile } from '../knowledge-store.js';
 import { LiveControlStore } from '../live-control-store.js';
@@ -238,6 +239,9 @@ test('管理页面需登录，登录后提供知识库管理、主持控制与�
   assert.match(response.headers['content-type'], /text\/html/);
   assert.match(response.body, /数字人内容工作台/);
   assert.match(response.body, /模型设置/);
+  assert.match(response.body, /回答风格/);
+  assert.match(response.body, /知识不足话术/);
+  assert.match(response.body, /服务异常话术/);
   assert.match(response.body, /知识库管理/);
   assert.match(response.body, /人工知识/);
   assert.match(response.body, /文件知识/);
@@ -1205,7 +1209,10 @@ test('模型初始为未配置，提问会返回明确的 503', async (t) => {
   });
   assert.equal(response.statusCode, 503);
   assert.equal(response.json().error, 'MODEL_NOT_CONFIGURED');
-  assert.equal(response.json().answer, MODEL_NOT_CONFIGURED_TEXT);
+  assert.equal(response.json().answerStatus, 'error');
+  assert.equal(response.json().answerStatusSource, 'system');
+  assert.equal(response.json().answer, SERVICE_ERROR_TEXT);
+  assert.equal(response.json().speechText, SERVICE_ERROR_TEXT);
 });
 
 test('模型验证成功后健康检查与就绪检查共同反映问答可用', async (t) => {
@@ -1285,9 +1292,15 @@ test('模型设置单独落盘为 0600，API Key 永不回显', async (t) => {
   assert.equal(savedResponse.json().apiKey, undefined);
   assert.equal(savedResponse.json().connection.status, 'available');
   assert.equal(savedResponse.json().connectionTest.ok, true);
+  assert.equal(savedResponse.json().answerStyle, DEFAULT_ANSWER_STYLE);
+  assert.equal(savedResponse.json().noAnswerText, NO_ANSWER_TEXT);
+  assert.equal(savedResponse.json().serviceErrorText, SERVICE_ERROR_TEXT);
 
   const diskConfig = JSON.parse(await readFile(modelConfigPath, 'utf8'));
   assert.equal(diskConfig.apiKey, MODEL_REQUEST.apiKey);
+  assert.equal(diskConfig.answerStyle, DEFAULT_ANSWER_STYLE);
+  assert.equal(diskConfig.noAnswerText, NO_ANSWER_TEXT);
+  assert.equal(diskConfig.serviceErrorText, SERVICE_ERROR_TEXT);
   assert.equal((await stat(modelConfigPath)).mode & 0o777, 0o600);
 
   const loaded = (
@@ -1319,7 +1332,8 @@ test('问答通过 OpenAI 兼容接口生成，并携带知识上下文', async 
   const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
   });
-  await configureModel(app);
+  const answerStyle = '像现场工作人员一样自然回答，使用两句简短口语。';
+  await configureModel(app, { answerStyle });
 
   const response = await app.inject({
     method: 'POST',
@@ -1349,6 +1363,7 @@ test('问答通过 OpenAI 兼容接口生成，并携带知识上下文', async 
   assert.equal(mock.calls.at(-1).body.model, MODEL_REQUEST.model);
   assert.match(mock.calls.at(-1).body.messages[0].content, /只能依据后台知识内容/);
   assert.match(mock.calls.at(-1).body.messages[0].content, /只返回一个 JSON 对象/);
+  assert.match(mock.calls.at(-1).body.messages[0].content, new RegExp(answerStyle));
   assert.match(mock.calls.at(-1).body.messages[1].content, /培训地点为测试教室/);
   assert.doesNotMatch(mock.calls.at(-1).body.messages[1].content, /资料来源/);
 });
@@ -1374,16 +1389,23 @@ test('模型拒答附带补充说明时仍稳定识别为 no_answer', async (t) 
 });
 
 test('模型结构化状态作为 answered 的首要依据', async (t) => {
+  const customNoAnswerText = '这个问题我还没有准确资料，请换一种问法。';
   const mock = createMockLlm({
     answer: JSON.stringify({
       status: 'no_answer',
-      answer: '模型自行生成的不同拒答措辞。',
+      answer: '',
     }),
   });
   const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
   });
   await configureModel(app);
+  const saved = await configureModel(app, {
+    apiKey: '',
+    noAnswerText: customNoAnswerText,
+  });
+  assert.equal(saved.json().noAnswerText, customNoAnswerText);
+  assert.equal(mock.calls.length, 1, '只修改兜底话术不应发起模型请求');
 
   const response = await app.inject({
     method: 'POST',
@@ -1394,7 +1416,8 @@ test('模型结构化状态作为 answered 的首要依据', async (t) => {
   assert.equal(response.json().answered, false);
   assert.equal(response.json().answerStatus, 'no_answer');
   assert.equal(response.json().answerStatusSource, 'structured');
-  assert.equal(response.json().answer, NO_ANSWER_TEXT);
+  assert.equal(response.json().answer, customNoAnswerText);
+  assert.equal(response.json().speechText, customNoAnswerText);
 });
 
 test('保存并测试模型连接会走同一 OpenAI 兼容接口', async (t) => {
@@ -1415,6 +1438,7 @@ test('保存并测试模型连接会走同一 OpenAI 兼容接口', async (t) =>
 });
 
 test('上游错误被转换为安全提示，不泄露 API Key 或上游详情', async (t) => {
+  const customServiceErrorText = '服务暂时有点忙，请稍后再问我。';
   const mock = createMockLlm({
     responses: [
       { answer: '连接成功。', status: 200 },
@@ -1424,7 +1448,7 @@ test('上游错误被转换为安全提示，不泄露 API Key 或上游详情',
   const { app } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
   });
-  await configureModel(app);
+  await configureModel(app, { serviceErrorText: customServiceErrorText });
 
   const response = await app.inject({
     method: 'POST',
@@ -1433,6 +1457,12 @@ test('上游错误被转换为安全提示，不泄露 API Key 或上游详情',
   });
   assert.equal(response.statusCode, 502);
   assert.equal(response.json().error, 'MODEL_UPSTREAM_ERROR');
+  assert.equal(response.json().answered, false);
+  assert.equal(response.json().answerStatus, 'error');
+  assert.equal(response.json().answerStatusSource, 'system');
+  assert.equal(response.json().answer, customServiceErrorText);
+  assert.equal(response.json().speechText, customServiceErrorText);
+  assert.equal(response.json().message, customServiceErrorText);
   assert.doesNotMatch(response.body, new RegExp(MODEL_REQUEST.apiKey));
   assert.doesNotMatch(response.body, /上游内部详情/);
 
@@ -1469,6 +1499,10 @@ test('空问题、额外字段和无效模型配置会被拒绝', async (t) => {
   });
   assert.equal(invalidConfig.statusCode, 400);
   assert.equal(invalidConfig.json().error, 'INVALID_MODEL_CONFIG');
+
+  const emptyFallback = await configureModel(app, { noAnswerText: '   ' });
+  assert.equal(emptyFallback.statusCode, 400);
+  assert.equal(emptyFallback.json().error, 'INVALID_MODEL_CONFIG');
 });
 
 test('无效 content.json 不替换上一有效上下文，修复后自动恢复', async (t) => {

@@ -414,9 +414,27 @@
           </label>
 
           <label class="field field-wide">
-            <span class="field-label">系统提示词 <b>必填</b></span>
+            <span class="field-label">回答风格 <b>必填</b></span>
+            <textarea id="model-answer-style" rows="4" maxlength="2000" required></textarea>
+            <small>控制语气、长短和播报表达；正常回答会遵守这里的要求。</small>
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">知识不足话术 <b>必填</b></span>
+            <textarea id="model-no-answer-text" rows="3" maxlength="1000" required></textarea>
+            <small>模型判断没有可靠答案时，由服务器直接返回并播报，不让模型自行编造。</small>
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">服务异常话术 <b>必填</b></span>
+            <textarea id="model-service-error-text" rows="3" maxlength="1000" required></textarea>
+            <small>模型未配置、连接失败或响应超时时，访客会看到并听到这段话。</small>
+          </label>
+
+          <label class="field field-wide">
+            <span class="field-label">角色与事实边界 <b>必填</b></span>
             <textarea id="model-system-prompt" rows="5" maxlength="10000" required></textarea>
-            <small>控制角色、语气和事实边界；后台内容与用户问题不能覆盖这里的规则。</small>
+            <small>控制数字人角色和事实边界；知识内容与用户问题不能覆盖这里的规则。</small>
           </label>
         </div>
 

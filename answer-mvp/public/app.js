@@ -91,6 +91,9 @@ const elements = {
   modelTemperature: document.querySelector('#model-temperature'),
   modelMaxTokens: document.querySelector('#model-max-tokens'),
   modelTimeout: document.querySelector('#model-timeout'),
+  modelAnswerStyle: document.querySelector('#model-answer-style'),
+  modelNoAnswerText: document.querySelector('#model-no-answer-text'),
+  modelServiceErrorText: document.querySelector('#model-service-error-text'),
   modelSystemPrompt: document.querySelector('#model-system-prompt'),
   modelMessage: document.querySelector('#model-message'),
   openOpsDialog: document.querySelector('#open-ops-dialog'),
@@ -179,6 +182,7 @@ async function requestJson(url, options = {}) {
     const error = new Error(payload.message || `请求失败（${response.status}）`);
     error.status = response.status;
     error.code = payload.error;
+    error.payload = payload;
     if (response.status === 401) {
       window.setTimeout(() => window.location.replace('/'), 0);
     }
@@ -1558,6 +1562,9 @@ function populateModelForm(config) {
   elements.modelTemperature.value = String(config.temperature ?? 0.2);
   elements.modelMaxTokens.value = String(config.maxTokens ?? 800);
   elements.modelTimeout.value = String((config.timeoutMs ?? 30_000) / 1_000);
+  elements.modelAnswerStyle.value = config.answerStyle ?? '';
+  elements.modelNoAnswerText.value = config.noAnswerText ?? '';
+  elements.modelServiceErrorText.value = config.serviceErrorText ?? '';
   elements.modelSystemPrompt.value = config.systemPrompt ?? '';
   elements.modelMessage.textContent = '';
   elements.modelMessage.classList.remove('success');
@@ -1604,6 +1611,9 @@ function modelRequestFromForm() {
     temperature: Number(elements.modelTemperature.value),
     maxTokens: Number(elements.modelMaxTokens.value),
     timeoutMs: Number(elements.modelTimeout.value) * 1_000,
+    answerStyle: elements.modelAnswerStyle.value.trim(),
+    noAnswerText: elements.modelNoAnswerText.value.trim(),
+    serviceErrorText: elements.modelServiceErrorText.value.trim(),
     systemPrompt: elements.modelSystemPrompt.value.trim(),
   };
 }
@@ -1749,7 +1759,7 @@ async function testQuestion(event) {
     }
   } catch (error) {
     elements.answerCard.className = 'answer-card answer-missing';
-    elements.answerText.textContent = error.message;
+    elements.answerText.textContent = error.payload?.answer || error.message;
     if (error.code === 'MODEL_NOT_CONFIGURED') {
       void openModelSettings();
     }

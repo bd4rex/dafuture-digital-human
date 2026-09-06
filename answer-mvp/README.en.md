@@ -4,7 +4,7 @@
 
 This is a runnable dual-mode prototype. Dialogue mode sends visitor questions, manual knowledge entries, and imported file knowledge to a configured large language model. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
 
-The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, and system prompt can all be configured in the web workbench.
+The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, answer style, two fallback messages, and role boundary can all be configured in the web workbench.
 
 ## Local Setup
 
@@ -38,7 +38,7 @@ The model is initially unconfigured. Open the workbench, select “Model Setting
 2. An API key.
 3. The model name, using the model ID supplied by the provider.
 
-“Save and Test Connection” first sends a very small real request with the candidate configuration, then persists and activates it only after validation succeeds. The same protection applies when “Save Settings” changes the API URL, key, or model name; changing only answer scope, generation parameters, or the system prompt does not repeat the test. Model requests may incur a small charge.
+“Save and Test Connection” first sends a very small real request with the candidate configuration, then persists and activates it only after validation succeeds. The same protection applies when “Save Settings” changes the API URL, key, or model name; changing only answer scope, generation parameters, answer style, fallback copy, or the role boundary does not repeat the test. Model requests may incur a small charge.
 
 ## Model Configuration Security
 
@@ -57,10 +57,12 @@ For a local run, the default path is `answer-mvp/model-config.json`. Docker uses
 
 The model settings provide two modes:
 
-- `Use managed content only`: the model may answer only from manual knowledge and imported file knowledge. When the available material is insufficient, it returns “No relevant information is currently available in the managed content.”
+- `Use managed content only`: the model may answer only from manual knowledge and imported file knowledge. When the available material is insufficient, the server returns the configured insufficient-knowledge message.
 - `Allow general knowledge`: the model prioritizes managed content and may supplement it with general knowledge, but must not invent project-specific dates, locations, fees, people, or rules.
 
 In both modes, manual knowledge and file knowledge are model context rather than final answers returned directly by the API.
+
+Normal answers follow the configured Answer Style. The model reports whether a reliable answer exists; when it returns `no_answer`, the server discards model-authored refusal copy and uses the administrator's insufficient-knowledge message. If the model is unconfigured, unreachable, times out, or returns an invalid response, the API preserves the relevant HTTP error and code while the avatar displays and speaks the configured service-error message. Technical details remain available only through operations diagnostics.
 
 ## Web Workbench
 
@@ -83,7 +85,7 @@ Select “Operations Logs” in the header to filter recent execution records by
 - Dialogue/Hosting mode switches, hosting-script saves, presentation dispatch, and stop commands.
 - Successful, rejected, and failed Q&A calls.
 
-Each entry includes time, action, request ID, route, actor type, client IP, HTTP status, duration, error code, and only the counts or identifiers needed for diagnosis. Passwords, cookies, Authorization values, API keys, system prompts, question/answer text, knowledge contents, and hosting-script text are explicitly excluded.
+Each entry includes time, action, request ID, route, actor type, client IP, HTTP status, duration, error code, and only the counts or identifiers needed for diagnosis. Passwords, cookies, Authorization values, API keys, system prompts, answer-style guidance, fallback copy, question/answer text, knowledge contents, and hosting-script text are explicitly excluded.
 
 Logs are written to `operations.jsonl` with `0600` permissions. The default retention is 5 MB per file and three files including the current file. The UI exposes only the filename, never the server's absolute path. A presentation log's `connectedClients` is the number of frontends connected when the server dispatched the command; it is not proof that a client speaker completed playback.
 
@@ -100,7 +102,7 @@ The model area supports:
 
 - Configuring an OpenAI-compatible API URL, API key, and model name.
 - Selecting the answer scope and setting temperature, maximum output tokens, and timeout.
-- Editing the system prompt.
+- Editing answer style, insufficient-knowledge copy, service-error copy, and the role/fact boundary independently.
 - Testing the model connection explicitly.
 
 ### File Knowledge
@@ -180,7 +182,7 @@ When the model is configured and the request succeeds:
 }
 ```
 
-`answerStatus` is the primary answered/refusal state, while `answered` remains as a compatibility boolean for older clients. The service prefers the model's structured status; compatible providers that cannot return structured output are marked with `answerStatusSource: "inferred"` and use robust refusal detection. `knowledgeContext.contextIds` lists the entries actually sent to the model, while `matchedIds` lists entries selected by the server's relevance heuristic. Neither field claims that the model cited or actually relied on a particular entry in its answer.
+`answerStatus` is the primary state: normal responses use `answered` or `no_answer`, and service failures use `error`. The `answered` field remains as a compatibility boolean for older clients. The service prefers the model's structured status; compatible providers that cannot return structured output are marked with `answerStatusSource: "inferred"` and use robust refusal detection. `knowledgeContext.contextIds` lists the entries actually sent to the model, while `matchedIds` lists entries selected by the server's relevance heuristic. Neither field claims that the model cited or actually relied on a particular entry in its answer.
 
 When the model is not configured, the endpoint returns HTTP `503`:
 
@@ -188,18 +190,22 @@ When the model is not configured, the endpoint returns HTTP `503`:
 {
   "error": "MODEL_NOT_CONFIGURED",
   "answered": false,
-  "answer": "The large language model has not been configured. Complete the API settings in the workbench first.",
-  "speechText": "The large language model has not been configured. Complete the API settings in the workbench first.",
-  "message": "The large language model has not been configured. Complete the API settings in the workbench first."
+  "answerStatus": "error",
+  "answerStatusSource": "system",
+  "answer": "抱歉，我现在暂时无法完成查询。请稍后再试，或者请工作人员帮您进一步确认。",
+  "speechText": "抱歉，我现在暂时无法完成查询。请稍后再试，或者请工作人员帮您进一步确认。",
+  "message": "抱歉，我现在暂时无法完成查询。请稍后再试，或者请工作人员帮您进一步确认。"
 }
 ```
+
+The example above shows the built-in Chinese default; administrators can replace it in Model Settings. Connection, timeout, and invalid-response failures likewise retain a non-2xx status and structured error code while carrying the currently configured service-error message. The frontend treats that message as speech-ready fallback copy; operators still diagnose the technical cause from HTTP status and operations logs.
 
 Questions are limited to 500 characters. Use `CORS_ORIGIN` to restrict the permitted frontend origin in an integration environment.
 
 ### Model Configuration Endpoints
 
-- `GET /api/model-config`: returns non-sensitive settings, `hasApiKey`, and the latest connection state.
-- `PUT /api/model-config`: saves settings; a blank key preserves the existing key. Changed complete connection fields are validated before activation; clients may also send `testConnection: true` explicitly.
+- `GET /api/model-config`: returns non-sensitive settings, answer style, both fallback messages, `hasApiKey`, and the latest connection state.
+- `PUT /api/model-config`: saves settings; a blank key preserves the existing key. Changed complete connection fields are validated before activation; clients may also send `testConnection: true` explicitly. Style-only or fallback-only edits do not call the model.
 - `POST /api/model-config/test`: sends a connection test using the saved settings.
 
 The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-control endpoints use the same administrator-session protection.

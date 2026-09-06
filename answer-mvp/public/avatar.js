@@ -1132,7 +1132,15 @@ async function requestAnswer(question, signal) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.message || `请求失败（${response.status}）`);
+    const error = new Error(payload.message || `请求失败（${response.status}）`);
+    error.code = payload.error;
+    error.fallbackText = typeof payload.answer === 'string'
+      ? payload.answer.trim()
+      : '';
+    error.speechText = typeof payload.speechText === 'string'
+      ? payload.speechText.trim()
+      : error.fallbackText;
+    throw error;
   }
   return payload;
 }
@@ -1174,6 +1182,21 @@ async function askQuestion(question) {
   } catch (error) {
     if (error.name === 'AbortError') {
       pendingMessage.remove();
+      return;
+    }
+
+    if (error.fallbackText) {
+      const remainingThinkingTime = 520 - (performance.now() - startedAt);
+      if (remainingThinkingTime > 0) {
+        await wait(remainingThinkingTime);
+      }
+      const speechSequence = runtime.flow.answerReady(requestSequence);
+      if (speechSequence === null) {
+        return;
+      }
+      pendingMessage.remove();
+      appendMessage('assistant', error.fallbackText, { error: true });
+      speakText(error.speechText || error.fallbackText, speechSequence);
       return;
     }
 
