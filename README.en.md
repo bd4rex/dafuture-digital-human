@@ -6,7 +6,8 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 
 ## Current Status
 
-- Application version: `0.7.0`.
+- Application version: `0.8.0`.
+- The Future Teacher public-benefit project library is bundled: 27 source documents become 7 topic files and 89 Q&A cards, automatically linked at first startup, including with an empty data volume.
 - The password-protected workbench now controls two live modes: Dialogue uses the configured LLM and persistent knowledge, while Hosting broadcasts a selected prepared script verbatim from the administration page.
 - Dialogue now opens file-based Knowledge Management directly. Manual question-entry and administration-side Q&A trial panels are no longer shown; the existing `content.json` remains read-compatible.
 - Model settings now separate answer style, insufficient-knowledge copy, and service-error copy. The model composes normal answers, while the server returns predictable, speech-ready fallback text.
@@ -37,6 +38,20 @@ By default, the service listens only on the local machine:
 
 See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, API, Docker, and security instructions.
 
+## Bundled Project Knowledge
+
+The default is **one Future Teacher project library with seven topics**: project and policy, training, laboratory and expert guidance, Nanjing, Haidian, Changsha, and historical milestones and statistical definitions. The 27 inputs comprise 10 PDFs and 17 DOCX files. Knowledge was prepared on September 6, 2026; training arrangements follow the formal August 24 notice. Conflicting figures, plans versus actual progress, and drafts versus formal notices remain explicitly distinguished.
+
+Start containers from the repository root:
+
+```bash
+docker compose up -d --build
+```
+
+The image keeps the source bundle at `/app/bundled-knowledge` and automatically imports it into persistent storage under `/data` on first startup. The workbench immediately lists seven topic files; no upload is required. Existing documents are retained and identical content is deduplicated. A receipt persists with the index, so deleting or replacing documents in the workbench remains effective after a restart. Existing model settings and the administration password are retained in the data volume; first-time users still need to configure their own model API.
+
+See [knowledge scope, provenance, and maintenance](answer-mvp/bundled-knowledge/README.en.md). These seven files alone fit in the existing 24,000-character full-context budget. Re-evaluate retrieval after adding substantial material. The 58 regression questions check evidence reaching the context, not real-model answer accuracy.
+
 ## Core Capabilities
 
 - Open Knowledge Management directly from Dialogue mode and import TXT, Markdown, CSV, JSON, DOCX, and PDF files while preserving originals and a persistent chunk index.
@@ -53,6 +68,8 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 
 ```text
 answer-mvp/                       Runnable Node.js/Fastify prototype
+answer-mvp/bundled-knowledge/     Default project knowledge and source catalog
+compose.yaml                     Container startup and persistent data volume
 assets/                           Architecture diagrams used by the plans
 build_content_platform_proposal.py  DOCX generator for the technical proposal
 大未来数字人问答_MVP最简方案_V1.2.md  Current minimal MVP plan
@@ -63,6 +80,7 @@ TIMESTAMP_LOG.md                  Project change and verification log
 ## Documentation
 
 - [Runtime and deployment (中文)](answer-mvp/README.md) / [English](answer-mvp/README.en.md)
+- [Bundled knowledge (中文)](answer-mvp/bundled-knowledge/README.md) / [English](answer-mvp/bundled-knowledge/README.en.md)
 - [Avatar video media (中文)](answer-mvp/public/avatar-media/README.md) / [English](answer-mvp/public/avatar-media/README.en.md)
 - [Project timestamp log (中文)](TIMESTAMP_LOG.md) / [English](TIMESTAMP_LOG.en.md)
 - [Minimal Q&A MVP Plan V1.2 (Chinese)](大未来数字人问答_MVP最简方案_V1.2.md)

@@ -7,6 +7,7 @@ RUN npm ci --omit=dev
 
 COPY --chown=node:node server.js admin-auth.js knowledge-store.js live-control-store.js ops-log-store.js ./
 COPY --chown=node:node public ./public
+COPY --chown=node:node bundled-knowledge ./bundled-knowledge
 
 RUN mkdir -p /data && chown node:node /data
 COPY --chown=node:node content.json /data/content.json

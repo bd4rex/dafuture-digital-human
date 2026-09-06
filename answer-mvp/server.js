@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,6 +16,9 @@ import { OPS_LOG_DEFAULTS, OpsLogStore } from './ops-log-store.js';
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONTENT_PATH = path.join(MODULE_DIR, 'content.json');
 const DEFAULT_PUBLIC_PATH = path.join(MODULE_DIR, 'public');
+const DEFAULT_BUNDLED_KNOWLEDGE_PATH = path.join(
+  MODULE_DIR, 'bundled-knowledge', 'future-teacher-2026',
+);
 const AVATAR_MEDIA_FILENAME = /^(idle|thinking|speaking|presenting)\.(webm|mov)$/;
 
 const LEGACY_NO_ANSWER_TEXT = '当前内容中暂无相关信息。';
@@ -962,6 +965,18 @@ export class ContentStore {
 
   async start() {
     // Legacy content is a recoverable backup, no longer an answer dependency.
+    try {
+      await stat(this.contentPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        await mkdir(path.dirname(this.contentPath), { recursive: true, mode: 0o700 });
+        try {
+          await writeFile(this.contentPath, '[]\n', { flag: 'wx', mode: 0o600 });
+        } catch (writeError) {
+          if (writeError.code !== 'EEXIST') throw writeError;
+        }
+      }
+    }
     await this.refresh();
     this.timer = setInterval(() => {
       void this.refresh();
@@ -1283,6 +1298,10 @@ export async function buildApp(options = {}) {
       process.env.KNOWLEDGE_FILES_DIR ??
       path.join(path.dirname(knowledgePath), 'knowledge-files'),
   );
+  const bundledKnowledgeEnabled = optionalBooleanSetting(
+    options.bundledKnowledgeEnabled ?? process.env.BUNDLED_KNOWLEDGE_ENABLED,
+    'BUNDLED_KNOWLEDGE_ENABLED',
+  ) ?? true;
   const adminAuthPath = path.resolve(
     options.adminAuthPath ??
       process.env.ADMIN_AUTH_FILE ??
@@ -1361,6 +1380,9 @@ export async function buildApp(options = {}) {
   const knowledgeStore = new KnowledgeStore({
     knowledgePath,
     filesDirectory: knowledgeFilesDirectory,
+    bundledKnowledgeDirectory: bundledKnowledgeEnabled
+      ? DEFAULT_BUNDLED_KNOWLEDGE_PATH
+      : null,
     logger: app.log,
   });
   await knowledgeStore.start();

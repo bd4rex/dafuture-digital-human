@@ -6,7 +6,8 @@
 
 ## 当前状态
 
-- 应用版本：`0.7.0`。
+- 应用版本：`0.8.0`。
+- 已内置未来教师公益计划知识库：27 份原始材料整理为 7 份主题文件、89 张问答卡片，首次启动自动关联，支持空数据卷挂载。
 - 已实现密码保护的双模式工作台：对话模式使用大语言模型与持久化知识库，主持模式由后台实时选择并原样播报预设文稿。
 - 对话模式现在直接打开文件知识库管理，后台不再显示人工问法录入或问答试运行区域；原有 `content.json` 仅保留兼容读取。
 - 模型设置支持独立配置回答风格、知识不足话术和服务异常话术；正常答案由模型自然组织，两类兜底由服务端稳定返回并可直接播报。
@@ -37,6 +38,20 @@ npm start
 
 完整运行、接口、Docker 和安全说明见 [`answer-mvp/README.md`](answer-mvp/README.md)。
 
+## 预置项目知识库
+
+本项目默认使用 **1 个未来教师公益计划知识库，按 7 个主题组织**：项目与政策、研修安排、实验室与专家指导、南京、海淀、长沙、历史节点与统计口径。27 份输入材料包括 10 份 PDF 和 17 份 DOCX；知识整理日为 2026 年 9 月 6 日，具体研修安排采用 8 月 24 日正式通知。原稿差异、计划与实际进展、草案与正式通知均保留区分。
+
+从项目根目录启动容器：
+
+```bash
+docker compose up -d --build
+```
+
+知识随镜像保存在 `/app/bundled-knowledge`，首次启动自动写入 `/data` 的持久化知识库，后台直接显示 7 份主题文件，无须再次上传。已有资料保留，相同内容去重；关联记录随索引持久化，后台删除或替换后重启不会恢复旧资料。模型连接配置和管理密码沿用数据卷内已有设置；首次使用仍需在工作台配置自己的模型 API。
+
+详见 [知识范围、来源与维护说明](answer-mvp/bundled-knowledge/README.md)。7 份文件单独使用时可在现有 24,000 字符预算内全量进入模型上下文；新增大量资料后应重新评估检索。58 道回归题检查证据是否进入上下文，不代表真实模型回答准确率。
+
 ## 核心能力
 
 - 对话模式直接进入“知识库管理”，通过 Web 导入 TXT、Markdown、CSV、JSON、DOCX 和 PDF，持久化原文件与分片索引。
@@ -53,6 +68,8 @@ npm start
 
 ```text
 answer-mvp/                       可运行的 Node.js/Fastify 原型
+answer-mvp/bundled-knowledge/     默认关联的项目知识与来源目录
+compose.yaml                     容器启动和持久化数据卷
 assets/                           方案文档所用架构图
 build_content_platform_proposal.py  技术方案 DOCX 生成脚本
 大未来数字人问答_MVP最简方案_V1.2.md  当前最简 MVP 方案
@@ -63,6 +80,7 @@ TIMESTAMP_LOG.md                  项目变更与验证记录
 ## 文档
 
 - [运行与部署说明（中文）](answer-mvp/README.md) / [English](answer-mvp/README.en.md)
+- [预置知识库说明（中文）](answer-mvp/bundled-knowledge/README.md) / [English](answer-mvp/bundled-knowledge/README.en.md)
 - [数字人视频素材说明（中文）](answer-mvp/public/avatar-media/README.md) / [English](answer-mvp/public/avatar-media/README.en.md)
 - [项目时间戳日志（中文）](TIMESTAMP_LOG.md) / [English](TIMESTAMP_LOG.en.md)
 - [问答 MVP 最简方案 V1.2](大未来数字人问答_MVP最简方案_V1.2.md)
