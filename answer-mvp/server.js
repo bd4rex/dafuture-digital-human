@@ -1345,7 +1345,7 @@ export async function buildApp(options = {}) {
     outcome: 'success',
     summary: '服务运行配置已加载',
     details: {
-      version: '0.6.0',
+      version: '0.6.1',
       contentCount: contentStore.items.length,
       knowledgeDocumentCount: knowledgeStore.documents.length,
       hostingScriptCount: liveControlStore.scripts.length,
@@ -1994,7 +1994,7 @@ export async function buildApp(options = {}) {
 
   app.get('/api', async () => ({
     service: '大未来数字人问答 MVP',
-    version: '0.6.0',
+    version: '0.6.1',
     contentCount: contentStore.items.length,
     knowledgeDocumentCount: knowledgeStore.documents.length,
     knowledgeChunkCount: knowledgeStore.chunkCount(),

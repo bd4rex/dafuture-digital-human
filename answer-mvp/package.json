@@ -1,6 +1,6 @@
 {
   "name": "dafuture-digital-human-answer-mvp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "“大未来”双模式数字人、知识库与可配置自然回答 MVP",
   "type": "module",

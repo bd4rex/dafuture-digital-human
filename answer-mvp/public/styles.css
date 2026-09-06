@@ -197,17 +197,6 @@ button:disabled {
   background: var(--white);
 }
 
-.button-dark {
-  width: 100%;
-  color: var(--white);
-  background: var(--forest);
-  box-shadow: 0 8px 22px rgba(18, 63, 58, 0.18);
-}
-
-.button-dark:hover {
-  background: var(--forest-deep);
-}
-
 .button-danger {
   color: #a33c27;
   background: var(--coral-soft);
@@ -319,25 +308,17 @@ main {
 
 .host-intro {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(430px, 0.56fr);
-  gap: clamp(30px, 6vw, 90px);
+  grid-template-columns: minmax(0, 1fr) minmax(440px, 0.62fr);
+  gap: clamp(30px, 6vw, 96px);
   align-items: end;
-  padding: clamp(42px, 6vw, 72px) 0 34px;
-}
-
-.host-intro h1 {
-  max-width: 850px;
-  margin: 0;
-  font-size: clamp(32px, 4vw, 58px);
-  letter-spacing: -0.045em;
-  line-height: 1.13;
+  padding: clamp(24px, 4vw, 44px) 0 28px;
 }
 
 .host-intro > div > p:last-child {
   max-width: 760px;
-  margin: 18px 0 0;
+  margin: 8px 0 0;
   color: var(--ink-soft);
-  font-size: 15px;
+  font-size: clamp(15px, 1.4vw, 18px);
   line-height: 1.75;
 }
 
@@ -599,8 +580,7 @@ main {
 }
 
 .eyebrow,
-.section-kicker,
-.answer-label {
+.section-kicker {
   margin: 0 0 9px;
   color: var(--teal);
   font-size: 11px;
@@ -677,7 +657,7 @@ main {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(260px, 0.72fr) minmax(430px, 1.35fr) minmax(300px, 0.82fr);
+  grid-template-columns: minmax(280px, 0.72fr) minmax(520px, 1.6fr);
   min-height: 690px;
   overflow: hidden;
   border: 1px solid rgba(18, 63, 58, 0.1);
@@ -700,10 +680,6 @@ main {
   min-height: 0;
   flex-direction: column;
   background: rgba(242, 247, 243, 0.74);
-}
-
-.tester-panel {
-  background: #faf7f0;
 }
 
 .panel-heading {
@@ -1013,81 +989,6 @@ main {
   content: "";
 }
 
-.tester-copy {
-  margin: 17px 0 21px;
-  color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.tester-form .button {
-  margin-top: 13px;
-}
-
-.quick-questions {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-  margin: 18px 0;
-}
-
-.quick-question {
-  max-width: 100%;
-  padding: 7px 10px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--teal);
-  background: rgba(255, 255, 255, 0.72);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quick-question:hover {
-  border-color: var(--mint-bright);
-  background: var(--white);
-}
-
-.answer-card {
-  min-height: 170px;
-  padding: 20px;
-  border: 1px solid rgba(18, 63, 58, 0.12);
-  border-radius: var(--radius-md);
-  background: var(--white);
-  box-shadow: var(--shadow-soft);
-}
-
-.answer-card.answer-success {
-  border-color: rgba(39, 119, 107, 0.25);
-  background: #fbfffd;
-}
-
-.answer-card.answer-missing {
-  border-color: rgba(220, 103, 69, 0.22);
-  background: #fffaf7;
-}
-
-.answer-card.answer-empty {
-  color: var(--ink-soft);
-}
-
-#answer-text {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.8;
-  white-space: pre-wrap;
-}
-
-.answer-meta {
-  margin: 17px 0 0;
-  padding-top: 13px;
-  border-top: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
 .dialog {
   width: min(480px, calc(100vw - 32px));
   padding: 0;
@@ -1199,40 +1100,20 @@ main {
   font-size: 11px;
 }
 
-.knowledge-dialog {
-  width: min(820px, calc(100vw - 32px));
+.knowledge-workspace {
+  min-height: 600px;
+  grid-template-columns: minmax(330px, 0.8fr) minmax(520px, 1.35fr);
 }
 
-.knowledge-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 20px 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: #f6f8f5;
+.knowledge-import-panel {
+  background: rgba(242, 247, 243, 0.74);
 }
 
-.knowledge-summary > div {
-  display: grid;
-  gap: 4px;
-  padding: 14px 16px;
-}
-
-.knowledge-summary > div + div {
-  border-left: 1px solid var(--line);
-}
-
-.knowledge-summary strong {
-  overflow: hidden;
-  font-size: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-summary span {
+.panel-copy {
+  margin: 17px 0 20px;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .file-drop-zone {
@@ -1377,6 +1258,8 @@ main {
 }
 
 .knowledge-import-actions {
+  display: flex;
+  justify-content: flex-end;
   margin-top: 10px;
 }
 
@@ -1384,6 +1267,12 @@ main {
   margin-top: 27px;
   padding-top: 22px;
   border-top: 1px solid var(--line);
+}
+
+.knowledge-library-inline {
+  margin-top: 0;
+  padding-top: 25px;
+  border-top: 0;
 }
 
 .knowledge-library-heading,
@@ -1898,30 +1787,6 @@ main {
     grid-template-columns: minmax(260px, 0.72fr) minmax(450px, 1.35fr);
   }
 
-  .tester-panel {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--line);
-    border-left: 0 !important;
-  }
-
-  .tester-panel {
-    display: grid;
-    grid-template-columns: minmax(250px, 0.75fr) minmax(360px, 1.25fr);
-    gap: 0 28px;
-  }
-
-  .tester-panel > .panel-heading,
-  .tester-panel > .tester-copy,
-  .tester-panel > .tester-form,
-  .tester-panel > .quick-questions {
-    grid-column: 1;
-  }
-
-  .tester-panel > .answer-card {
-    grid-row: 1 / span 4;
-    grid-column: 2;
-  }
-
   .host-status-board {
     max-width: 720px;
   }
@@ -2002,14 +1867,6 @@ main {
 
   .empty-state {
     min-height: 330px;
-  }
-
-  .tester-panel {
-    display: block;
-  }
-
-  .tester-panel > .answer-card {
-    margin-top: 18px;
   }
 
   .host-workspace {

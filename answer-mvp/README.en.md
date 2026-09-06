@@ -2,7 +2,7 @@
 
 # “Da Future” LLM Digital Human Q&A MVP
 
-This is a runnable dual-mode prototype. Dialogue mode sends visitor questions, manual knowledge entries, and imported file knowledge to a configured large language model. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
+This is a runnable dual-mode prototype. Dialogue mode sends visitor questions and persistent knowledge to a configured large language model, while the administration page directly imports and manages knowledge files. Hosting mode lets an administrator select a prepared script and sends its exact text to every open digital-human frontend for immediate playback.
 
 The current implementation supports OpenAI-compatible `/chat/completions` endpoints. The API URL, API key, model name, answer scope, answer style, two fallback messages, and role boundary can all be configured in the web workbench.
 
@@ -17,7 +17,7 @@ npm start
 
 By default, the service listens only on `http://127.0.0.1:8080`:
 
-- `http://127.0.0.1:8080/`: live mode control, manual knowledge, file knowledge, and model workbench.
+- `http://127.0.0.1:8080/`: live mode control, file-based knowledge management, and model settings.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: diagnostics, content revision, and model connection state; always returns HTTP 200.
 - `http://127.0.0.1:8080/ready`: Q&A readiness; returns HTTP 503 when unavailable.
@@ -26,7 +26,7 @@ The first visit to the administration page asks you to create an administration 
 
 ## Administrator Sign-In
 
-- Before sign-in, `/` serves only the password page. Manual-knowledge, file-knowledge, and model-configuration APIs are all enforced by the server, not merely hidden in the browser.
+- Before sign-in, `/` serves only the password page. Knowledge and model-configuration APIs are enforced by the server, not merely hidden in the browser.
 - Without a preset password, the first visitor can create it directly without an address or page-origin restriction; local, LAN, and Docker access use the same flow.
 - A password created through the page is stored only as a salted scrypt hash in `admin-auth.json`, written atomically with `0600` permissions.
 - Successful sign-in creates an HttpOnly, SameSite=Strict cookie. The session expires after eight hours by default and is invalidated by logout or service restart.
@@ -68,7 +68,7 @@ Normal answers follow the configured Answer Style. The model reports whether a r
 
 The tabs at the top of the workbench also switch the live runtime mode:
 
-- **Dialogue mode** enables typed or spoken visitor questions backed by the configured LLM and managed knowledge.
+- **Dialogue mode** opens file-based Knowledge Management directly and enables typed or spoken visitor questions backed by the configured LLM and managed knowledge.
 - **Hosting mode** immediately pauses visitor Q&A. Administrators can maintain multiple scripts and select “Save and Broadcast” to send one exact script without LLM rewriting.
 - Same-origin SSE broadcasts mode, presentation, and stop commands to every open frontend. A new script interrupts the previous one. Stop keeps the frontend in hosting standby; returning to dialogue mode restores Q&A.
 - Scripts persist in `host-scripts.json` with revision conflict protection. On restart, scripts remain, but runtime mode resets to dialogue and no old command is replayed.
@@ -89,14 +89,13 @@ Each entry includes time, action, request ID, route, actor type, client IP, HTTP
 
 Logs are written to `operations.jsonl` with `0600` permissions. The default retention is 5 MB per file and three files including the current file. The UI exposes only the filename, never the server's absolute path. A presentation log's `connectedClients` is the number of frontends connected when the server dispatched the command; it is not proof that a client speaker completed playback.
 
-The Knowledge Management area supports:
+Knowledge Management is shown directly in Dialogue mode; manual question entry and the administration-side Q&A trial are no longer presented. It supports:
 
-- Creating, editing, copying, sorting, deleting, and searching manual knowledge entries.
-- Adding applicable questions, retrieval keywords, and knowledge content to each entry.
-- Saving the complete `content.json` file so later model answers use the new content immediately.
-- Validating required fields, duplicate knowledge IDs, and duplicate question phrasings.
-- Using a revision and disk hash to prevent concurrent changes from being silently overwritten.
-- Calling the active model from the right-hand panel to test Q&A directly.
+- Importing UTF-8 TXT, Markdown, CSV, and JSON files, plus DOCX and text-based PDFs; scanned PDFs require OCR first.
+- Reviewing selected filenames, sizes, and import mode before submission, with limits of 10 files per request, 10 MB per file, and 30 MB total.
+- Appending while skipping identical SHA-256 content, or replacing the complete knowledge-file collection after confirmation.
+- Previewing extracted text, downloading the preserved original, or deleting one document and its chunks.
+- Persisting extracted chunks in `knowledge.json` and originals in `knowledge-files/`; both live under Docker's `/data` volume.
 
 The model area supports:
 
@@ -104,16 +103,6 @@ The model area supports:
 - Selecting the answer scope and setting temperature, maximum output tokens, and timeout.
 - Editing answer style, insufficient-knowledge copy, service-error copy, and the role/fact boundary independently.
 - Testing the model connection explicitly.
-
-### File Knowledge
-
-Select “File Knowledge” in the header to:
-
-- Import UTF-8 TXT, Markdown, CSV, and JSON files, plus DOCX and text-based PDFs. Scanned PDFs require OCR first.
-- Review selected filenames and sizes before submission. Each request accepts up to 10 files, 10 MB per file, and 30 MB in total.
-- Append while skipping identical SHA-256 content, or replace the complete imported-file collection without changing manual knowledge entries.
-- Preview extracted text, download the preserved original, or delete one document and all its chunks.
-- Persist extracted chunks in `knowledge.json` and originals in `knowledge-files/`; both live under Docker's `/data` volume.
 
 At answer time, the service selects up to 12 relevant imported chunks within the overall context budget. Filenames remain administration-only and are not presented as source attribution in the visitor interface.
 
@@ -250,15 +239,15 @@ Open the administration page once to create the password, then use it to sign in
 
 Before exposing the service publicly, an existing gateway should also provide HTTPS, rate limiting, and an appropriate access-log policy.
 
-## Editing `content.json`
+## `content.json` Compatibility
 
-The web workbench is recommended, but the file can also be edited directly. By default, the service checks it every two seconds:
+The current administration page no longer shows manual question entry, but the service keeps existing `content.json` files and `GET/PUT /api/content` read/write compatible without migrating or deleting their data. If this compatibility content needs maintenance, edit the file directly; the service checks it every two seconds by default:
 
 - When a new file passes validation, the complete content set is activated atomically.
 - When the new file is invalid, the previous valid content remains active and health status changes to `degraded`.
 - Health status returns to `ready` after the file is corrected.
 
-Each manual-knowledge entry requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. The UI labels these as Knowledge ID, Applicable Questions, Retrieval Keywords, and Knowledge Content; the underlying fields stay unchanged so existing `content.json` files remain compatible.
+Each compatibility entry still requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. These fields remain available to model context and visitor quick questions but are no longer exposed as an administration form.
 
 ## Automated Tests
 

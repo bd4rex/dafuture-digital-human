@@ -22,9 +22,6 @@
         <a class="button button-secondary" href="/avatar" target="_blank" rel="noopener">
           打开数字人前台
         </a>
-        <button class="button button-secondary" id="open-knowledge-dialog" type="button">
-          文件知识
-        </button>
         <button class="button button-secondary" id="open-model-dialog" type="button">
           模型设置
         </button>
@@ -34,9 +31,6 @@
         <button class="button button-quiet" id="logout-admin" type="button">
           退出登录
         </button>
-        <button class="button button-primary" id="save-all" type="button" disabled>
-          保存全部更改
-        </button>
       </div>
     </header>
 
@@ -44,7 +38,7 @@
       <nav class="mode-tabs" role="tablist" aria-label="数字人运行模式">
         <button class="mode-tab active" id="dialogue-tab" type="button" role="tab" aria-selected="true" aria-controls="dialogue-panel" data-workbench-mode="dialogue">
           <span class="mode-tab-icon" aria-hidden="true">问</span>
-          <span><strong>对话模式</strong><small>大语言模型问答</small></span>
+          <span><strong>对话模式</strong><small>知识库管理</small></span>
           <i aria-hidden="true"></i>
         </button>
         <button class="mode-tab" id="hosting-tab" type="button" role="tab" aria-selected="false" aria-controls="hosting-panel" data-workbench-mode="hosting">
@@ -55,154 +49,95 @@
       </nav>
 
       <section class="mode-panel" id="dialogue-panel" role="tabpanel" aria-labelledby="dialogue-tab">
-      <section class="intro" aria-label="知识库管理">
-        <div>
-          <p class="eyebrow">CONTENT WORKBENCH · MVP</p>
-          <p class="intro-copy">
-            在这里维护人工知识，或导入外部文件知识，再通过“模型设置”接入 OpenAI 兼容 API。保存后，大模型会立即使用知识库中的最新内容组织回答。
-          </p>
-        </div>
+        <section class="intro" aria-label="知识库管理">
+          <div>
+            <p class="eyebrow">KNOWLEDGE MANAGEMENT · MVP</p>
+            <p class="intro-copy">
+              在这里导入和维护知识库文件，再通过“模型设置”接入 OpenAI 兼容 API。对话模式会直接使用知识库中的最新内容生成回答。
+            </p>
+          </div>
 
-        <dl class="status-board" aria-label="服务状态">
-          <div>
-            <dt>服务状态</dt>
-            <dd><span class="status-dot" id="status-dot"></span><span id="service-status">连接中</span></dd>
-          </div>
-          <div>
-            <dt>人工知识</dt>
-            <dd id="content-count">—</dd>
-          </div>
-          <div>
-            <dt>文件知识</dt>
-            <dd id="knowledge-count">—</dd>
-          </div>
-          <div>
-            <dt>保存状态</dt>
-            <dd id="save-status">等待载入</dd>
-          </div>
-          <div>
-            <dt>模型状态</dt>
-            <dd id="model-status">读取中</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="workspace" aria-label="知识库管理工作区">
-        <aside class="panel library-panel">
-          <div class="panel-heading">
+          <dl class="status-board" aria-label="服务状态">
             <div>
-              <p class="section-kicker">知识库管理</p>
-              <h2>人工知识</h2>
+              <dt>服务状态</dt>
+              <dd><span class="status-dot" id="status-dot"></span><span id="service-status">连接中</span></dd>
             </div>
-            <button class="icon-button" id="add-item" type="button" aria-label="新增人工知识" title="新增人工知识">
-              <span aria-hidden="true">＋</span>
-            </button>
-          </div>
-
-          <label class="search-field" for="content-search">
-            <span class="visually-hidden">搜索人工知识</span>
-            <span aria-hidden="true">⌕</span>
-            <input id="content-search" type="search" placeholder="搜索适用问题、关键词或知识内容">
-          </label>
-
-          <div class="item-list" id="item-list" role="listbox" aria-label="人工知识列表"></div>
-
-          <div class="library-footer">
-            <span id="visible-count">0 条知识</span>
-            <span>存储于 content.json</span>
-          </div>
-        </aside>
-
-        <section class="panel editor-panel" aria-labelledby="editor-title">
-          <div class="empty-state" id="empty-state">
-            <span class="empty-mark" aria-hidden="true">知</span>
-            <h2>选择一条人工知识开始编辑</h2>
-            <p>也可以点击左侧的“＋”新建知识条目。</p>
-          </div>
-
-          <form id="content-form" class="content-form" hidden novalidate>
-            <div class="panel-heading editor-heading">
-              <div>
-                <p class="section-kicker">人工知识编辑</p>
-                <h2 id="editor-title">知识条目配置</h2>
-              </div>
-              <span class="record-position" id="record-position"></span>
+            <div>
+              <dt>知识文件</dt>
+              <dd id="knowledge-count">—</dd>
             </div>
-
-            <div class="form-grid">
-              <label class="field field-wide">
-                <span class="field-label">知识 ID <b>必填</b></span>
-                <input id="field-id" name="id" maxlength="100" autocomplete="off" required>
-                <small>供系统识别，建议使用英文、数字和短横线。</small>
-              </label>
-
-              <label class="field field-wide">
-                <span class="field-label">适用问题 <b>必填</b></span>
-                <textarea id="field-questions" name="questions" rows="5" maxlength="5000" placeholder="这个项目是什么？&#10;请介绍一下这个项目&#10;这个项目主要做什么？" required></textarea>
-                <small>每行填写一种可能问法；第一行作为列表标题和快捷测试问题。</small>
-              </label>
-
-              <label class="field field-wide">
-                <span class="field-label">检索关键词 <b>必填</b></span>
-                <input id="field-keywords" name="keywords" maxlength="1000" placeholder="项目，大未来，介绍" required>
-                <small>使用中文或英文逗号分隔，也可换行。</small>
-              </label>
-
-              <label class="field field-wide">
-                <span class="field-label">知识内容 <b>必填</b></span>
-                <textarea id="field-answer" name="answer" rows="8" maxlength="10000" placeholder="填写希望大模型参考的业务事实、规则或回答要点。" required></textarea>
-                <small><span id="answer-length">0</span> / 10000 字；不要填写 XXX、XX 或尚未确认的日期和地点。</small>
-              </label>
+            <div>
+              <dt>可检索片段</dt>
+              <dd id="knowledge-chunk-count">—</dd>
             </div>
-
-            <div class="editor-actions">
-              <div>
-                <button class="button button-danger" id="delete-item" type="button">删除</button>
-              </div>
-              <div>
-                <button class="button button-quiet" id="move-up" type="button">上移</button>
-                <button class="button button-quiet" id="move-down" type="button">下移</button>
-                <button class="button button-secondary" id="duplicate-item" type="button">复制一条</button>
-              </div>
+            <div>
+              <dt>持久化状态</dt>
+              <dd id="knowledge-storage-state">读取中</dd>
             </div>
-          </form>
+            <div>
+              <dt>模型状态</dt>
+              <dd id="model-status">读取中</dd>
+            </div>
+          </dl>
         </section>
 
-        <aside class="panel tester-panel" aria-labelledby="tester-title">
-          <div class="panel-heading">
-            <div>
-              <p class="section-kicker">即时验证</p>
-              <h2 id="tester-title">问答试运行</h2>
+        <form id="knowledge-form" class="workspace knowledge-workspace" novalidate>
+          <section class="panel knowledge-import-panel" aria-labelledby="knowledge-import-title">
+            <div class="panel-heading">
+              <div>
+                <p class="section-kicker">知识库管理</p>
+                <h2 id="knowledge-import-title">导入知识文件</h2>
+              </div>
             </div>
-            <span class="live-badge">LIVE</span>
-          </div>
+            <p class="panel-copy">原文件和提取后的知识片段会持久化保存，服务重启后仍然有效。支持 TXT、Markdown、CSV、JSON、DOCX 和 PDF。</p>
 
-          <p class="tester-copy">输入前台或数字人可能收到的问题，查看大模型结合当前知识库生成的回答。</p>
-
-          <form id="tester-form" class="tester-form">
-            <label class="field">
-              <span class="field-label">测试问题</span>
-              <textarea id="test-question" rows="4" maxlength="500" placeholder="例如：前台怎么调用问答接口？" required></textarea>
+            <label class="file-drop-zone" for="knowledge-files">
+              <input id="knowledge-files" name="files" type="file" accept=".txt,.md,.csv,.json,.docx,.pdf" multiple required>
+              <span class="file-drop-icon" aria-hidden="true">↑</span>
+              <strong>选择要导入的文件</strong>
+              <small>每次最多 10 个，单个不超过 10 MB，合计不超过 30 MB</small>
             </label>
-            <button class="button button-dark" id="test-submit" type="submit">测试回答</button>
-          </form>
+            <div class="selected-files" id="selected-files" aria-live="polite">尚未选择文件。</div>
 
-          <div class="quick-questions" id="quick-questions" aria-label="当前知识的快捷测试问题"></div>
+            <fieldset class="import-mode">
+              <legend>导入方式</legend>
+              <label>
+                <input type="radio" name="knowledge-mode" value="append" checked>
+                <span><strong>追加</strong><small>保留已有知识，自动跳过内容完全相同的文件。</small></span>
+              </label>
+              <label>
+                <input type="radio" name="knowledge-mode" value="replace">
+                <span><strong>替换</strong><small>清空现有文件，只保留本次导入的内容。</small></span>
+              </label>
+            </fieldset>
+            <label class="replace-confirm" id="replace-confirm-row" hidden>
+              <input id="replace-confirm" type="checkbox">
+              <span>我已确认要替换现有知识文件。</span>
+            </label>
 
-          <section class="answer-card answer-empty" id="answer-card" aria-live="polite">
-            <p class="answer-label">回答结果</p>
-            <p id="answer-text">提交一个问题后，答案会显示在这里。</p>
-            <p class="answer-meta" id="answer-meta" hidden></p>
+            <p class="dialog-message" id="knowledge-message" aria-live="polite"></p>
+            <div class="knowledge-import-actions">
+              <button class="button button-primary" id="import-knowledge" type="submit">导入并保存</button>
+            </div>
           </section>
-        </aside>
-      </section>
+
+          <section class="panel knowledge-library knowledge-library-inline" aria-labelledby="knowledge-library-title">
+            <div class="knowledge-library-heading">
+              <div>
+                <p class="section-kicker">已持久化</p>
+                <h2 id="knowledge-library-title">知识文件</h2>
+              </div>
+              <button class="button button-quiet button-small" id="refresh-knowledge" type="button">刷新列表</button>
+            </div>
+            <div class="knowledge-document-list" id="knowledge-document-list"></div>
+          </section>
+        </form>
       </section>
 
       <section class="mode-panel" id="hosting-panel" role="tabpanel" aria-labelledby="hosting-tab" hidden>
-        <section class="host-intro" aria-labelledby="hosting-title">
+        <section class="host-intro" aria-label="主持模式概览">
           <div>
             <p class="eyebrow">LIVE HOST CONTROL · DETERMINISTIC</p>
-            <h1 id="hosting-title">预先写好主持词，点击哪段，前台就播哪段。</h1>
             <p>主持模式不调用大语言模型。主持词保存到服务器，后台指令会实时发送给所有已打开的数字人前台。</p>
           </div>
           <dl class="host-status-board" aria-label="主持控制状态">
@@ -294,66 +229,6 @@
         </section>
       </section>
     </main>
-
-    <dialog id="knowledge-dialog" class="dialog dialog-wide knowledge-dialog">
-      <form id="knowledge-form" novalidate>
-        <div class="dialog-heading">
-          <div>
-            <p class="section-kicker">PERSISTENT KNOWLEDGE</p>
-            <h2>文件知识</h2>
-          </div>
-          <button class="dialog-close" id="close-knowledge-dialog" aria-label="关闭" type="button">×</button>
-        </div>
-        <p>导入后会保存原文件和提取后的知识片段，服务重启后仍然有效。支持 TXT、Markdown、CSV、JSON、DOCX 和 PDF。</p>
-
-        <section class="knowledge-summary" aria-label="文件知识摘要">
-          <div><strong id="knowledge-document-count">0</strong><span>已导入文件</span></div>
-          <div><strong id="knowledge-chunk-count">0</strong><span>可检索片段</span></div>
-          <div><strong id="knowledge-storage-state">读取中</strong><span>持久化状态</span></div>
-        </section>
-
-        <label class="file-drop-zone" for="knowledge-files">
-          <input id="knowledge-files" name="files" type="file" accept=".txt,.md,.csv,.json,.docx,.pdf" multiple required>
-          <span class="file-drop-icon" aria-hidden="true">↑</span>
-          <strong>选择要导入的文件</strong>
-          <small>每次最多 10 个，单个不超过 10 MB，合计不超过 30 MB</small>
-        </label>
-        <div class="selected-files" id="selected-files" aria-live="polite">尚未选择文件。</div>
-
-        <fieldset class="import-mode">
-          <legend>导入方式</legend>
-          <label>
-            <input type="radio" name="knowledge-mode" value="append" checked>
-            <span><strong>追加</strong><small>保留已有知识，自动跳过内容完全相同的文件。</small></span>
-          </label>
-          <label>
-            <input type="radio" name="knowledge-mode" value="replace">
-            <span><strong>替换</strong><small>清空现有外部文件，只保留本次导入的内容。</small></span>
-          </label>
-        </fieldset>
-        <label class="replace-confirm" id="replace-confirm-row" hidden>
-          <input id="replace-confirm" type="checkbox">
-          <span>我已确认要替换现有文件知识。人工知识不受影响。</span>
-        </label>
-
-        <p class="dialog-message" id="knowledge-message"></p>
-        <div class="dialog-actions knowledge-import-actions">
-          <button class="button button-quiet" id="cancel-knowledge-import" type="button">关闭</button>
-          <button class="button button-primary" id="import-knowledge" type="submit">导入并保存</button>
-        </div>
-
-        <section class="knowledge-library" aria-labelledby="knowledge-library-title">
-          <div class="knowledge-library-heading">
-            <div>
-              <p class="section-kicker">已持久化</p>
-              <h3 id="knowledge-library-title">已导入文件</h3>
-            </div>
-            <button class="button button-quiet button-small" id="refresh-knowledge" type="button">刷新列表</button>
-          </div>
-          <div class="knowledge-document-list" id="knowledge-document-list"></div>
-        </section>
-      </form>
-    </dialog>
 
     <dialog id="model-dialog" class="dialog dialog-wide">
       <form id="model-form" novalidate>
@@ -526,18 +401,6 @@
             <a class="button button-secondary" id="download-ops-logs" href="/api/ops-logs/download">下载 JSONL</a>
             <button class="button button-quiet" id="dismiss-ops-dialog" type="button">关闭</button>
           </div>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="delete-dialog" class="dialog dialog-small">
-      <form method="dialog" id="delete-form">
-        <p class="section-kicker">请确认</p>
-        <h2>删除这条问答？</h2>
-        <p id="delete-message">删除后，需要点击“保存全部更改”才会写入内容文件。</p>
-        <div class="dialog-actions">
-          <button class="button button-quiet" value="cancel" type="submit">取消</button>
-          <button class="button button-danger" id="confirm-delete" value="default" type="submit">确认删除</button>
         </div>
       </form>
     </dialog>

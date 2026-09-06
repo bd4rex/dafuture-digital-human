@@ -1,11 +1,4 @@
 const state = {
-  items: [],
-  revision: null,
-  selectedIndex: -1,
-  dirty: false,
-  saving: false,
-  search: '',
-  accessMode: null,
   modelConfig: null,
   modelSaving: false,
   knowledge: null,
@@ -27,39 +20,9 @@ const state = {
 const elements = {
   statusDot: document.querySelector('#status-dot'),
   serviceStatus: document.querySelector('#service-status'),
-  contentCount: document.querySelector('#content-count'),
   knowledgeCount: document.querySelector('#knowledge-count'),
-  saveStatus: document.querySelector('#save-status'),
   modelStatus: document.querySelector('#model-status'),
-  saveAll: document.querySelector('#save-all'),
-  addItem: document.querySelector('#add-item'),
-  search: document.querySelector('#content-search'),
-  itemList: document.querySelector('#item-list'),
-  visibleCount: document.querySelector('#visible-count'),
-  emptyState: document.querySelector('#empty-state'),
-  contentForm: document.querySelector('#content-form'),
-  recordPosition: document.querySelector('#record-position'),
-  fieldId: document.querySelector('#field-id'),
-  fieldQuestions: document.querySelector('#field-questions'),
-  fieldKeywords: document.querySelector('#field-keywords'),
-  fieldAnswer: document.querySelector('#field-answer'),
-  answerLength: document.querySelector('#answer-length'),
-  deleteItem: document.querySelector('#delete-item'),
-  duplicateItem: document.querySelector('#duplicate-item'),
-  moveUp: document.querySelector('#move-up'),
-  moveDown: document.querySelector('#move-down'),
-  testerForm: document.querySelector('#tester-form'),
-  testQuestion: document.querySelector('#test-question'),
-  testSubmit: document.querySelector('#test-submit'),
-  quickQuestions: document.querySelector('#quick-questions'),
-  answerCard: document.querySelector('#answer-card'),
-  answerText: document.querySelector('#answer-text'),
-  answerMeta: document.querySelector('#answer-meta'),
-  openKnowledgeDialog: document.querySelector('#open-knowledge-dialog'),
-  knowledgeDialog: document.querySelector('#knowledge-dialog'),
   knowledgeForm: document.querySelector('#knowledge-form'),
-  closeKnowledgeDialog: document.querySelector('#close-knowledge-dialog'),
-  cancelKnowledgeImport: document.querySelector('#cancel-knowledge-import'),
   knowledgeFiles: document.querySelector('#knowledge-files'),
   selectedFiles: document.querySelector('#selected-files'),
   knowledgeModeInputs: [
@@ -70,7 +33,6 @@ const elements = {
   knowledgeMessage: document.querySelector('#knowledge-message'),
   importKnowledge: document.querySelector('#import-knowledge'),
   refreshKnowledge: document.querySelector('#refresh-knowledge'),
-  knowledgeDocumentCount: document.querySelector('#knowledge-document-count'),
   knowledgeChunkCount: document.querySelector('#knowledge-chunk-count'),
   knowledgeStorageState: document.querySelector('#knowledge-storage-state'),
   knowledgeDocumentList: document.querySelector('#knowledge-document-list'),
@@ -143,9 +105,6 @@ const elements = {
   stopHostBroadcast: document.querySelector('#stop-host-broadcast'),
   saveHostScripts: document.querySelector('#save-host-scripts'),
   returnDialogueMode: document.querySelector('#return-dialogue-mode'),
-  deleteDialog: document.querySelector('#delete-dialog'),
-  deleteMessage: document.querySelector('#delete-message'),
-  confirmDelete: document.querySelector('#confirm-delete'),
   toast: document.querySelector('#toast'),
 };
 
@@ -182,7 +141,6 @@ async function requestJson(url, options = {}) {
     const error = new Error(payload.message || `请求失败（${response.status}）`);
     error.status = response.status;
     error.code = payload.error;
-    error.payload = payload;
     if (response.status === 401) {
       window.setTimeout(() => window.location.replace('/'), 0);
     }
@@ -212,28 +170,6 @@ function setServiceStatus(status, text) {
   elements.serviceStatus.textContent = text;
 }
 
-function updateSaveState(text) {
-  if (text) {
-    elements.saveStatus.textContent = text;
-  } else if (state.saving) {
-    elements.saveStatus.textContent = '正在保存';
-  } else if (state.dirty) {
-    elements.saveStatus.textContent = '有未保存更改';
-  } else if (state.revision) {
-    elements.saveStatus.textContent = '全部已保存';
-  } else {
-    elements.saveStatus.textContent = '等待载入';
-  }
-
-  elements.saveAll.disabled = !state.dirty || state.saving || !state.revision;
-  elements.saveAll.textContent = state.saving ? '正在保存…' : '保存全部更改';
-}
-
-function markDirty() {
-  state.dirty = true;
-  updateSaveState();
-}
-
 function currentHostScript() {
   return state.hostScripts[state.selectedHostIndex] ?? null;
 }
@@ -243,7 +179,6 @@ function setWorkbenchPanel(mode) {
   const hosting = state.workbenchMode === 'hosting';
   elements.dialoguePanel.hidden = hosting;
   elements.hostingPanel.hidden = !hosting;
-  elements.saveAll.hidden = hosting;
 
   for (const tab of elements.modeTabs) {
     const selected = tab.dataset.workbenchMode === state.workbenchMode;
@@ -666,372 +601,6 @@ async function stopHostBroadcast() {
   }
 }
 
-function currentItem() {
-  return state.items[state.selectedIndex] ?? null;
-}
-
-function normalizeSearchText(value) {
-  return value.normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, '');
-}
-
-function renderList() {
-  elements.itemList.replaceChildren();
-  const query = normalizeSearchText(state.search);
-  const visibleItems = state.items
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => {
-      if (!query) {
-        return true;
-      }
-      const searchable = [
-        item.id,
-        ...item.questions,
-        ...item.keywords,
-        item.answer,
-      ].join('');
-      return normalizeSearchText(searchable).includes(query);
-    });
-
-  if (visibleItems.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'list-empty';
-    empty.textContent = state.items.length
-      ? '没有找到匹配的人工知识，换个关键词试试。'
-      : '还没有人工知识。点击右上角“＋”新建第一条。';
-    elements.itemList.append(empty);
-  }
-
-  for (const { item, index } of visibleItems) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'content-item';
-    button.classList.toggle('selected', index === state.selectedIndex);
-    button.setAttribute('role', 'option');
-    button.setAttribute('aria-selected', String(index === state.selectedIndex));
-
-    const title = document.createElement('span');
-    title.className = 'content-item-title';
-    title.textContent = item.questions[0] || '未填写适用问题';
-
-    const meta = document.createElement('span');
-    meta.className = 'content-item-meta';
-    meta.textContent = item.id || '尚未填写知识 ID';
-
-    button.append(title, meta);
-    button.addEventListener('click', () => {
-      state.selectedIndex = index;
-      renderList();
-      renderEditor();
-    });
-    elements.itemList.append(button);
-  }
-
-  elements.visibleCount.textContent = `${visibleItems.length} 条知识`;
-  elements.contentCount.textContent = String(state.items.length);
-}
-
-function renderQuickQuestions() {
-  elements.quickQuestions.replaceChildren();
-  const item = currentItem();
-  if (!item) {
-    return;
-  }
-
-  for (const question of item.questions.filter(Boolean).slice(0, 3)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'quick-question';
-    button.textContent = question;
-    button.title = `测试：${question}`;
-    button.addEventListener('click', () => {
-      elements.testQuestion.value = question;
-      elements.testerForm.requestSubmit();
-    });
-    elements.quickQuestions.append(button);
-  }
-}
-
-function clearInvalidFields() {
-  for (const field of elements.contentForm.querySelectorAll('.field.invalid')) {
-    field.classList.remove('invalid');
-  }
-}
-
-function renderEditor() {
-  const item = currentItem();
-  elements.emptyState.hidden = Boolean(item);
-  elements.contentForm.hidden = !item;
-
-  if (!item) {
-    renderQuickQuestions();
-    return;
-  }
-
-  clearInvalidFields();
-  elements.fieldId.value = item.id;
-  elements.fieldQuestions.value = item.questions.join('\n');
-  elements.fieldKeywords.value = item.keywords.join('，');
-  elements.fieldAnswer.value = item.answer;
-  elements.answerLength.textContent = String(item.answer.length);
-  elements.recordPosition.textContent = `${state.selectedIndex + 1} / ${state.items.length}`;
-  elements.moveUp.disabled = state.selectedIndex <= 0;
-  elements.moveDown.disabled = state.selectedIndex >= state.items.length - 1;
-  renderQuickQuestions();
-}
-
-function parseLines(value) {
-  return value
-    .split(/\r?\n/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-function parseKeywords(value) {
-  return [...new Set(
-    value
-      .split(/[,，\r\n]+/)
-      .map((part) => part.trim())
-      .filter(Boolean),
-  )];
-}
-
-function syncEditorToState(event) {
-  const item = currentItem();
-  if (!item) {
-    return;
-  }
-
-  const target = event.target;
-  if (target === elements.fieldId) {
-    item.id = target.value;
-  } else if (target === elements.fieldQuestions) {
-    item.questions = parseLines(target.value);
-  } else if (target === elements.fieldKeywords) {
-    item.keywords = parseKeywords(target.value);
-  } else if (target === elements.fieldAnswer) {
-    item.answer = target.value;
-    elements.answerLength.textContent = String(target.value.length);
-  } else {
-    return;
-  }
-
-  target.closest('.field')?.classList.remove('invalid');
-  markDirty();
-  renderList();
-  if (target === elements.fieldQuestions) {
-    renderQuickQuestions();
-  }
-}
-
-function createUniqueId(base = `faq-${Date.now().toString(36)}`) {
-  const used = new Set(state.items.map((item) => item.id));
-  if (!used.has(base)) {
-    return base;
-  }
-
-  let suffix = 2;
-  while (used.has(`${base}-${suffix}`)) {
-    suffix += 1;
-  }
-  return `${base}-${suffix}`;
-}
-
-function addItem() {
-  state.items.push({
-    id: createUniqueId(),
-    questions: [],
-    keywords: [],
-    answer: '',
-  });
-  state.selectedIndex = state.items.length - 1;
-  state.search = '';
-  elements.search.value = '';
-  markDirty();
-  renderList();
-  renderEditor();
-  elements.fieldQuestions.focus();
-}
-
-function duplicateItem() {
-  const item = currentItem();
-  if (!item) {
-    return;
-  }
-
-  const firstQuestion = item.questions[0] || '新知识';
-  const duplicate = {
-    id: createUniqueId(`${item.id || 'faq'}-copy`),
-    questions: [`${firstQuestion}（副本）`],
-    keywords: [...item.keywords],
-    answer: item.answer,
-  };
-  state.items.splice(state.selectedIndex + 1, 0, duplicate);
-  state.selectedIndex += 1;
-  markDirty();
-  renderList();
-  renderEditor();
-  elements.fieldQuestions.focus();
-  elements.fieldQuestions.select();
-}
-
-function moveItem(offset) {
-  const destination = state.selectedIndex + offset;
-  if (
-    state.selectedIndex < 0 ||
-    destination < 0 ||
-    destination >= state.items.length
-  ) {
-    return;
-  }
-
-  const [item] = state.items.splice(state.selectedIndex, 1);
-  state.items.splice(destination, 0, item);
-  state.selectedIndex = destination;
-  markDirty();
-  renderList();
-  renderEditor();
-}
-
-function deleteCurrentItem() {
-  if (!currentItem()) {
-    return;
-  }
-  state.items.splice(state.selectedIndex, 1);
-  state.selectedIndex = Math.min(state.selectedIndex, state.items.length - 1);
-  markDirty();
-  renderList();
-  renderEditor();
-  showToast('已从当前编辑中删除；点击“保存全部更改”后正式生效。');
-}
-
-function normalizedQuestion(value) {
-  return value.normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, '');
-}
-
-function validateItems() {
-  const ids = new Map();
-  const questions = new Map();
-
-  for (const [index, item] of state.items.entries()) {
-    if (!item.id.trim()) {
-      return { index, field: 'id', message: '请填写知识 ID。' };
-    }
-    if (ids.has(item.id.trim())) {
-      return { index, field: 'id', message: `知识 ID 与第 ${ids.get(item.id.trim()) + 1} 条重复。` };
-    }
-    ids.set(item.id.trim(), index);
-
-    if (!item.questions.length) {
-      return { index, field: 'questions', message: '请至少填写一种用户问法。' };
-    }
-    if (!item.keywords.length) {
-      return { index, field: 'keywords', message: '请至少填写一个检索关键词。' };
-    }
-    if (!item.answer.trim()) {
-      return { index, field: 'answer', message: '请填写知识内容。' };
-    }
-
-    for (const question of item.questions) {
-      const normalized = normalizedQuestion(question);
-      if (!normalized) {
-        return { index, field: 'questions', message: '问法不能只包含空白或标点。' };
-      }
-      if (questions.has(normalized)) {
-        return {
-          index,
-          field: 'questions',
-          message: `存在重复问法，与第 ${questions.get(normalized) + 1} 条冲突。`,
-        };
-      }
-      questions.set(normalized, index);
-    }
-  }
-
-  return null;
-}
-
-function showValidationError(validation) {
-  state.selectedIndex = validation.index;
-  renderList();
-  renderEditor();
-  const field = elements.contentForm.querySelector(`[name="${validation.field}"]`);
-  field?.closest('.field')?.classList.add('invalid');
-  field?.focus();
-  showToast(validation.message, 'error');
-}
-
-async function saveContent() {
-  if (!state.dirty || state.saving || !state.revision) {
-    return;
-  }
-
-  const validation = validateItems();
-  if (validation) {
-    showValidationError(validation);
-    return;
-  }
-
-  const selectedId = currentItem()?.id;
-  state.saving = true;
-  updateSaveState();
-
-  try {
-    const result = await requestJson('/api/content', {
-      method: 'PUT',
-      body: {
-        revision: state.revision,
-        items: state.items,
-      },
-    });
-    state.items = result.items;
-    state.revision = result.revision;
-    state.accessMode = result.accessMode;
-    state.selectedIndex = Math.max(
-      0,
-      state.items.findIndex((item) => item.id === selectedId),
-    );
-    if (state.items.length === 0) {
-      state.selectedIndex = -1;
-    }
-    state.dirty = false;
-    renderList();
-    renderEditor();
-    showToast('内容已保存并立即生效。');
-  } catch (error) {
-    updateSaveState(
-      error.status === 409 ? '内容版本有冲突' : '保存失败',
-    );
-    showToast(error.message, 'error');
-  } finally {
-    state.saving = false;
-    updateSaveState();
-  }
-}
-
-async function loadContent() {
-  try {
-    const result = await requestJson('/api/content');
-    state.items = result.items;
-    state.revision = result.revision;
-    state.accessMode = result.accessMode;
-    state.selectedIndex = state.items.length ? 0 : -1;
-    state.dirty = false;
-    renderList();
-    renderEditor();
-    updateSaveState();
-    return true;
-  } catch (error) {
-    state.revision = null;
-    elements.contentCount.textContent = '—';
-    updateSaveState(
-      error.status === 401 ? '需要重新登录' : '无法读取内容',
-    );
-    showToast(error.message, 'error');
-
-    return false;
-  }
-}
-
 function formatBytes(value) {
   if (!Number.isFinite(value) || value < 0) {
     return '—';
@@ -1261,9 +830,6 @@ function closeOpsLogs() {
 function setKnowledgeSnapshot(snapshot) {
   state.knowledge = snapshot;
   elements.knowledgeCount.textContent = String(snapshot.documentCount ?? 0);
-  elements.knowledgeDocumentCount.textContent = String(
-    snapshot.documentCount ?? 0,
-  );
   elements.knowledgeChunkCount.textContent = String(snapshot.chunkCount ?? 0);
   elements.knowledgeStorageState.textContent = snapshot.revision
     ? '已持久化'
@@ -1378,7 +944,6 @@ async function loadKnowledge({ silent = false } = {}) {
   } catch (error) {
     state.knowledge = null;
     elements.knowledgeCount.textContent = '—';
-    elements.knowledgeDocumentCount.textContent = '—';
     elements.knowledgeChunkCount.textContent = '—';
     elements.knowledgeStorageState.textContent = '读取失败';
     renderKnowledgeDocuments();
@@ -1393,8 +958,6 @@ function setKnowledgeBusy(busy) {
   state.knowledgeImporting = busy;
   elements.importKnowledge.disabled = busy;
   elements.knowledgeFiles.disabled = busy;
-  elements.closeKnowledgeDialog.disabled = busy;
-  elements.cancelKnowledgeImport.disabled = busy;
   elements.refreshKnowledge.disabled = busy;
   for (const input of elements.knowledgeModeInputs) {
     input.disabled = busy;
@@ -1723,90 +1286,6 @@ async function refreshHealth() {
   }
 }
 
-async function testQuestion(event) {
-  event.preventDefault();
-  if (state.liveControl?.mode === 'hosting') {
-    showToast('主持模式下问答已暂停，请先返回对话模式。', 'error');
-    return;
-  }
-  const question = elements.testQuestion.value.trim();
-  if (!question) {
-    elements.testQuestion.focus();
-    return;
-  }
-
-  elements.testSubmit.disabled = true;
-  elements.testSubmit.textContent = '正在查询…';
-  elements.answerCard.className = 'answer-card answer-empty';
-  elements.answerText.textContent = '正在调用大语言模型生成回答…';
-  elements.answerMeta.hidden = true;
-
-  try {
-    const result = await requestJson('/answer', {
-      method: 'POST',
-      body: { question },
-    });
-    const answered = result.answerStatus
-      ? result.answerStatus === 'answered'
-      : result.answered;
-    elements.answerCard.className = `answer-card ${
-      answered ? 'answer-success' : 'answer-missing'
-    }`;
-    elements.answerText.textContent = result.answer;
-    if (result.model) {
-      elements.answerMeta.textContent = `生成模型：${result.model}`;
-      elements.answerMeta.hidden = false;
-    }
-  } catch (error) {
-    elements.answerCard.className = 'answer-card answer-missing';
-    elements.answerText.textContent = error.payload?.answer || error.message;
-    if (error.code === 'MODEL_NOT_CONFIGURED') {
-      void openModelSettings();
-    }
-  } finally {
-    elements.testSubmit.disabled = false;
-    elements.testSubmit.textContent = '测试回答';
-  }
-}
-
-elements.search.addEventListener('input', (event) => {
-  state.search = event.target.value;
-  renderList();
-});
-elements.addItem.addEventListener('click', addItem);
-elements.contentForm.addEventListener('input', syncEditorToState);
-elements.saveAll.addEventListener('click', saveContent);
-elements.duplicateItem.addEventListener('click', duplicateItem);
-elements.moveUp.addEventListener('click', () => moveItem(-1));
-elements.moveDown.addEventListener('click', () => moveItem(1));
-elements.deleteItem.addEventListener('click', () => {
-  const item = currentItem();
-  if (!item) {
-    return;
-  }
-  elements.deleteMessage.textContent = `将删除“${item.questions[0] || item.id}”。保存前仍可刷新页面撤销。`;
-  elements.deleteDialog.showModal();
-});
-elements.confirmDelete.addEventListener('click', (event) => {
-  event.preventDefault();
-  elements.deleteDialog.close();
-  deleteCurrentItem();
-});
-elements.testerForm.addEventListener('submit', testQuestion);
-elements.openKnowledgeDialog.addEventListener('click', async () => {
-  elements.knowledgeMessage.textContent = '';
-  elements.knowledgeMessage.classList.remove('success');
-  if (!elements.knowledgeDialog.open) {
-    elements.knowledgeDialog.showModal();
-  }
-  await loadKnowledge();
-});
-elements.closeKnowledgeDialog.addEventListener('click', () => {
-  elements.knowledgeDialog.close();
-});
-elements.cancelKnowledgeImport.addEventListener('click', () => {
-  elements.knowledgeDialog.close();
-});
 elements.knowledgeFiles.addEventListener('change', () => {
   renderSelectedKnowledgeFiles();
   elements.knowledgeMessage.textContent = '';
@@ -1892,16 +1371,12 @@ elements.returnDialogueMode.addEventListener('click', () => {
   void switchWorkbenchMode('dialogue');
 });
 elements.logoutAdmin.addEventListener('click', async () => {
-  if (
-    (state.dirty || state.hostDirty) &&
-    !window.confirm('当前还有未保存的修改，确定退出吗？')
-  ) {
+  if (state.hostDirty && !window.confirm('当前还有未保存的主持词，确定退出吗？')) {
     return;
   }
   elements.logoutAdmin.disabled = true;
   try {
     await requestJson('/api/admin/logout', { method: 'POST' });
-    state.dirty = false;
     state.hostDirty = false;
     window.location.replace('/');
   } catch (error) {
@@ -1911,18 +1386,18 @@ elements.logoutAdmin.addEventListener('click', async () => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+  if (
+    state.workbenchMode === 'hosting' &&
+    (event.metaKey || event.ctrlKey) &&
+    event.key.toLowerCase() === 's'
+  ) {
     event.preventDefault();
-    if (state.workbenchMode === 'hosting') {
-      void saveHostScripts();
-    } else {
-      void saveContent();
-    }
+    void saveHostScripts();
   }
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (state.dirty || state.hostDirty) {
+  if (state.hostDirty) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -1930,14 +1405,11 @@ window.addEventListener('beforeunload', (event) => {
 
 async function start() {
   await refreshHealth();
-  const connected = await loadContent();
-  if (connected) {
-    await Promise.all([
-      loadModelConfig(),
-      loadKnowledge(),
-      loadLiveControl(),
-    ]);
-  }
+  await Promise.all([
+    loadModelConfig(),
+    loadKnowledge(),
+    loadLiveControl(),
+  ]);
   renderSelectedKnowledgeFiles();
   syncKnowledgeMode();
   setInterval(() => void refreshHealth(), 10_000);

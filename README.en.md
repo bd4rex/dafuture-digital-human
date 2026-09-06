@@ -6,8 +6,9 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 
 ## Current Status
 
-- Application version: `0.6.0`.
+- Application version: `0.6.1`.
 - The password-protected workbench now controls two live modes: Dialogue uses the configured LLM and persistent knowledge, while Hosting broadcasts a selected prepared script verbatim from the administration page.
+- Dialogue now opens file-based Knowledge Management directly. Manual question-entry and administration-side Q&A trial panels are no longer shown; the existing `content.json` remains read-compatible.
 - Model settings now separate answer style, insufficient-knowledge copy, and service-error copy. The model composes normal answers, while the server returns predictable, speech-ready fallback text.
 - Hosting scripts persist on the server. Mode, present, and stop commands synchronize to every open avatar frontend through SSE; a new command interrupts the previous script, while a service restart does not replay it.
 - Persistent operations logs record key action outcomes, response codes, execution times, and safe diagnostic metadata, with authenticated filtering and download in the workbench.
@@ -27,7 +28,7 @@ npm start
 
 By default, the service listens only on the local machine:
 
-- `http://127.0.0.1:8080/`: dual-mode control, manual knowledge, file knowledge, and model workbench.
+- `http://127.0.0.1:8080/`: dual-mode control, file-based knowledge management, and model settings.
 - `http://127.0.0.1:8080/avatar`: visitor-facing digital-human Q&A page.
 - `http://127.0.0.1:8080/health`: service diagnostics and dependency state.
 - `http://127.0.0.1:8080/ready`: Q&A readiness check.
@@ -36,15 +37,14 @@ See [`answer-mvp/README.en.md`](answer-mvp/README.en.md) for complete runtime, A
 
 ## Core Capabilities
 
-- Maintain manual knowledge in “Knowledge Management”; applicable questions, retrieval keywords, and knowledge content remain compatible with `content.json`.
-- Import TXT, Markdown, CSV, JSON, DOCX, and PDF files through the web UI, preserving originals and a persistent chunk index.
+- Open Knowledge Management directly from Dialogue mode and import TXT, Markdown, CSV, JSON, DOCX, and PDF files while preserving originals and a persistent chunk index.
 - Configure an OpenAI-compatible API URL, API key, model name, answer scope, natural-response guidance, and two fallback messages in the web workbench.
 - Send a user question and managed content to the model through `POST /answer`.
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
-- Diagnose sign-in, manual-knowledge, file-knowledge, model, hosting-control, and Q&A actions through the operations-log viewer.
+- Diagnose sign-in, knowledge-file, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
 - Allow first-time setup, sign-in, and all authenticated administration APIs from any page origin while retaining server-verified passwords, HttpOnly sessions, and optional Bearer access for automation.
-- Activate candidate model connections only after validation succeeds, and keep visitor quick questions synchronized with the workbench content revision.
+- Activate candidate model connections only after validation succeeds while retaining read compatibility for existing `content.json` data and APIs.
 - Sanitize upstream model errors and replace technical details with speech-ready service fallback copy, without exposing API keys or upstream details.
 
 ## Repository Layout

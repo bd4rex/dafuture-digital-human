@@ -225,7 +225,7 @@ async function waitUntil(assertion, timeoutMs = 1_500) {
   throw lastError ?? new Error('等待条件超时');
 }
 
-test('管理页面需登录，登录后提供知识库管理、主持控制与模型设置', async (t) => {
+test('管理页面需登录，登录后直接提供文件知识库、主持控制与模型设置', async (t) => {
   const { app } = await createTestApp(t);
   const loginPage = await app.inject({ method: 'GET', url: '/' });
 
@@ -243,14 +243,17 @@ test('管理页面需登录，登录后提供知识库管理、主持控制与�
   assert.match(response.body, /知识不足话术/);
   assert.match(response.body, /服务异常话术/);
   assert.match(response.body, /知识库管理/);
-  assert.match(response.body, /人工知识/);
-  assert.match(response.body, /文件知识/);
+  assert.match(response.body, /导入知识文件/);
+  assert.match(response.body, /知识文件/);
   assert.match(response.body, /API Key/);
-  assert.match(response.body, /保存全部更改/);
   assert.match(response.body, /对话模式/);
   assert.match(response.body, /主持模式/);
   assert.match(response.body, /保存并播报到前台/);
   assert.match(response.body, /运维日志/);
+  assert.doesNotMatch(response.body, /人工知识编辑/);
+  assert.doesNotMatch(response.body, /适用问题/);
+  assert.doesNotMatch(response.body, /问答试运行/);
+  assert.doesNotMatch(response.body, /预先写好主持词，点击哪段/);
   assert.doesNotMatch(response.body, /问答条目/);
   assert.doesNotMatch(response.body, /把业务内容交给大模型/);
   assert.doesNotMatch(response.body, /资料来源/);
@@ -698,7 +701,7 @@ test('运维日志脱敏嵌套密钥并按文件大小自动轮转', async (t) =
   assert.equal(snapshot.fileCount, 2);
 });
 
-test('访客快捷问题随内容工作台保存结果和版本号更新', async (t) => {
+test('访客快捷问题随兼容内容 API 的保存结果和版本号更新', async (t) => {
   const { app } = await createTestApp(t);
   const loaded = (
     await adminInject(app, { method: 'GET', url: '/api/content' })
@@ -757,7 +760,7 @@ test('已登录内容接口返回可编辑内容和版本号', async (t) => {
   assert.equal(body.items[0].source, undefined);
 });
 
-test('Web 保存的新内容会进入模型上下文，不再被直接作为答案返回', async (t) => {
+test('兼容内容 API 保存的新内容会进入模型上下文，不直接作为答案返回', async (t) => {
   const mock = createMockLlm({ answer: '模型重新组织后的地点说明。' });
   const { app, contentPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
