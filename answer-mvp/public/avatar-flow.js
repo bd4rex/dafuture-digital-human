@@ -81,12 +81,12 @@ export class AvatarFlow {
     return this.speechSequence;
   }
 
-  finishSpeech(speechSequence) {
+  finishSpeech(speechSequence, outcome = 'completed') {
     if (speechSequence !== this.speechSequence) {
       return false;
     }
 
-    this.transition('idle', 'speech-finished');
+    this.transition('idle', outcome === 'completed' ? 'speech-finished' : `speech-${outcome}`);
     return true;
   }
 
@@ -101,5 +101,32 @@ export class AvatarFlow {
     this.requestSequence += 1;
     this.speechSequence += 1;
     this.transition('idle', reason);
+  }
+}
+
+/** Orders SSE and HTTP snapshots, including service restarts. Never replays audio. */
+export class LiveStateTracker {
+  constructor() {
+    this.instanceId = null;
+    this.sequence = -1;
+    this.retiredInstances = new Set();
+  }
+
+  accept(snapshot) {
+    if (!snapshot || typeof snapshot.instanceId !== 'string' ||
+        !Number.isInteger(snapshot.sequence) || snapshot.sequence < 0 ||
+        !['dialogue', 'hosting'].includes(snapshot.mode) ||
+        !(snapshot.commandSequence === null ||
+          (Number.isInteger(snapshot.commandSequence) && snapshot.commandSequence <= snapshot.sequence))) {
+      return null;
+    }
+    if (this.retiredInstances.has(snapshot.instanceId)) return null;
+    const restarted = this.instanceId !== null && this.instanceId !== snapshot.instanceId;
+    if (this.instanceId === snapshot.instanceId && snapshot.sequence < this.sequence) return null;
+    const duplicate = this.instanceId === snapshot.instanceId && snapshot.sequence === this.sequence;
+    if (restarted) this.retiredInstances.add(this.instanceId);
+    this.instanceId = snapshot.instanceId;
+    this.sequence = snapshot.sequence;
+    return { restarted, duplicate };
   }
 }

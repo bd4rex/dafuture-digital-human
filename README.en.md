@@ -6,12 +6,14 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 
 ## Current Status
 
-- Application version: `0.6.1`.
+- Application version: `0.7.0`.
 - The password-protected workbench now controls two live modes: Dialogue uses the configured LLM and persistent knowledge, while Hosting broadcasts a selected prepared script verbatim from the administration page.
 - Dialogue now opens file-based Knowledge Management directly. Manual question-entry and administration-side Q&A trial panels are no longer shown; the existing `content.json` remains read-compatible.
 - Model settings now separate answer style, insufficient-knowledge copy, and service-error copy. The model composes normal answers, while the server returns predictable, speech-ready fallback text.
 - Hosting scripts persist on the server. Mode, present, and stop commands synchronize to every open avatar frontend through SSE; a new command interrupts the previous script, while a service restart does not replay it.
-- Persistent operations logs record key action outcomes, response codes, execution times, and safe diagnostic metadata, with authenticated filtering and download in the workbench.
+- Authenticated logs retain full questions and answers, conversation IDs, upstream status, retrieval details, and browser-reported playback results. Credentials remain redacted.
+- Small libraries are sent in full within a 24,000-character budget; larger libraries use synonym-expanded retrieval and a no-match fallback. Legacy content is inactive until explicitly imported through Knowledge Management.
+- Hosting uses instance IDs and sequence ordering. Disconnects pause old playback; reconnection never replays it. Failed, muted, cancelled, and completed audio have distinct outcomes.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
 - No real model configuration is included. Users must enter their own settings in the workbench after the first launch.
 - This is an MVP prototype and has not been deployed to a production server. Production male-avatar media is integrated, and browser playback now prefers Mandarin male voices; cross-device production-grade TTS still needs to be integrated.
@@ -76,7 +78,7 @@ npm test
 npm audit --omit=dev
 ```
 
-The committed suite contains 37 automated tests covering administration passwords and sessions, operations-log persistence/redaction/rotation, persistent hosting scripts, live mode switching, exact SSE commands, hosting/Q&A exclusion, imported-file persistence and restart recovery, DOCX/PDF extraction, candidate rollback, response semantics, model-configuration security, content hot reload, error sanitization, the avatar state machine, and video range requests.
+Tests cover administration sessions, full dialogue and execution logs, upstream failure classification, synonym retrieval, legacy migration, hosting reconnect/stale-state regressions, speech outcomes, natural fallbacks, file persistence, model settings, and video range requests. Run `npm test` for the current count and results.
 
 ## Security Boundary for the Public Repository
 

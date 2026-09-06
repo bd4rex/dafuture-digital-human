@@ -15,6 +15,7 @@ const state = {
   opsLoading: false,
   opsRefreshTimer: null,
   toastTimer: null,
+  legacyContent: null,
 };
 
 const elements = {
@@ -106,6 +107,10 @@ const elements = {
   saveHostScripts: document.querySelector('#save-host-scripts'),
   returnDialogueMode: document.querySelector('#return-dialogue-mode'),
   toast: document.querySelector('#toast'),
+  legacyNotice: document.querySelector('#legacy-content-notice'),
+  legacySummary: document.querySelector('#legacy-content-summary'),
+  migrateLegacy: document.querySelector('#migrate-legacy-content'),
+  downloadLegacy: document.querySelector('#download-legacy-content'),
 };
 
 async function requestJson(url, options = {}) {
@@ -291,7 +296,13 @@ function renderHostControl() {
   const indicatorHint = elements.hostLiveIndicator.querySelector('small');
   if (hosting && lastCommand) {
     indicatorTitle.textContent = `已下发：${lastCommand.title}`;
-    indicatorHint.textContent = '所有已连接前台已收到播报指令';
+    const reports = snapshot.playbackReports ?? [];
+    const completed = reports.filter((item) => item.phase === 'speech-completed').length;
+    const failed = reports.filter((item) => ['speech-failed', 'speech-unavailable'].includes(item.phase)).length;
+    const muted = reports.filter((item) => item.phase === 'speech-muted').length;
+    indicatorHint.textContent = reports.length
+      ? `前台反馈 ${reports.length} 个：完成 ${completed} · 失败 ${failed} · 静音 ${muted}（详见日志）`
+      : '指令已发送，尚未收到前台播放反馈';
   } else if (hosting) {
     indicatorTitle.textContent = '主持模式待命';
     indicatorHint.textContent = '选择一段主持词开始';
@@ -310,6 +321,7 @@ function renderHostControl() {
 }
 
 function applyLiveSnapshot(snapshot, { replaceScripts = true } = {}) {
+  if (state.liveControl?.instanceId === snapshot.instanceId && snapshot.sequence < state.liveControl.sequence) return;
   const selectedId = currentHostScript()?.id;
   state.liveControl = snapshot;
   state.hostRevision = replaceScripts ? snapshot.revision : state.hostRevision;
@@ -495,6 +507,7 @@ async function saveHostScripts() {
 }
 
 async function loadLiveControl({ silent = false } = {}) {
+  if (state.liveBusy || state.hostSaving) return false;
   try {
     const snapshot = await requestJson('/api/live-control');
     applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
@@ -744,6 +757,28 @@ function renderOpsLogs(snapshot) {
       2,
     );
     diagnostic.append(diagnosticSummary, diagnostics);
+    if (entry.dialogue) {
+      const transcript = document.createElement('pre');
+      transcript.className = 'ops-dialogue';
+      transcript.style.whiteSpace = 'pre-wrap';
+      transcript.textContent = `提问：${entry.dialogue.question || '（无）'}\n\n回答：${entry.dialogue.answer || '（等待回答或请求未完成）'}`;
+      diagnostic.append(transcript);
+      diagnosticSummary.textContent += ' · 问答正文';
+    }
+    if (entry.details?.turnId) {
+      const followTurn = document.createElement('button');
+      followTurn.type = 'button';
+      followTurn.className = 'button button-quiet button-small';
+      followTurn.textContent = '查看本轮完整记录';
+      followTurn.addEventListener('click', () => {
+        elements.opsSearch.value = entry.details.turnId;
+        elements.opsCategory.value = '';
+        elements.opsOutcome.value = '';
+        elements.opsLevel.value = '';
+        void loadOpsLogs();
+      });
+      diagnostic.append(followTurn);
+    }
     row.append(time, event, outcome, execution, diagnostic);
     elements.opsLogList.append(row);
   }
@@ -953,6 +988,38 @@ async function loadKnowledge({ silent = false } = {}) {
     return false;
   }
 }
+
+async function loadLegacyContent() {
+  try {
+    state.legacyContent = await requestJson('/api/content');
+    const count = state.legacyContent.items?.length ?? 0;
+    elements.legacyNotice.hidden = count === 0;
+    elements.legacySummary.textContent = `${count} 条历史问答备份（未迁入前不参与回答）`;
+  } catch { elements.legacyNotice.hidden = true; }
+}
+
+elements.migrateLegacy.addEventListener('click', async () => {
+  if (!state.legacyContent || !window.confirm('将历史问答迁入为知识文件？原备份会保留，迁入后可在知识文件列表中删除。')) return;
+  elements.migrateLegacy.disabled = true;
+  try {
+    const snapshot = await requestJson('/api/knowledge/migrate-legacy', {
+      method: 'POST', body: { revision: state.legacyContent.revision },
+    });
+    setKnowledgeSnapshot(snapshot);
+    showToast('历史内容已迁入知识文件列表。');
+  } catch (error) { showToast(error.message, 'error'); }
+  finally { elements.migrateLegacy.disabled = false; }
+});
+
+elements.downloadLegacy.addEventListener('click', () => {
+  if (!state.legacyContent) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(state.legacyContent.items, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '历史问答备份.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+});
 
 function setKnowledgeBusy(busy) {
   state.knowledgeImporting = busy;
@@ -1408,6 +1475,7 @@ async function start() {
   await Promise.all([
     loadModelConfig(),
     loadKnowledge(),
+    loadLegacyContent(),
     loadLiveControl(),
   ]);
   renderSelectedKnowledgeFiles();

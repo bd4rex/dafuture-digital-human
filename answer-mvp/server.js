@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -606,6 +606,13 @@ const GENERIC_QUESTION_TERMS = new Set([
   '知道',
 ]);
 const IMPORTED_TEXT_NORMALIZATION_CACHE = new WeakMap();
+const SEARCH_SYNONYMS = [
+  ['门票', '票价', '多少钱', '费用', '收费', '价格'],
+  ['地址', '位置', '地点', '在哪', '怎么走', '路线'],
+  ['开放时间', '营业时间', '几点', '什么时候', '时间安排'],
+  ['报名', '预约', '登记', '如何参加'],
+  ['联系', '电话', '联系方式', '咨询'],
+];
 
 function questionSearchTerms(question) {
   const normalized = normalizeQuestion(question);
@@ -616,6 +623,11 @@ function questionSearchTerms(question) {
     .match(/[a-z0-9]{2,}/g);
   for (const term of latinTerms ?? []) {
     terms.add(term);
+  }
+  for (const group of SEARCH_SYNONYMS) {
+    if (group.some((term) => normalized.includes(term))) {
+      for (const term of group) terms.add(term);
+    }
   }
 
   const chinese = normalized.replace(/[^\p{Script=Han}]/gu, '');
@@ -696,27 +708,41 @@ export function selectKnowledgeContext(
       text: serializeImportedKnowledgeChunk(chunk),
       kind: 'imported',
     }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+
+  // Small libraries fit in one bounded prompt: do not discard knowledge merely
+  // because the visitor used a synonym the local lexical scorer does not know.
+  const allCandidates = [...manualCandidates, ...importedCandidates];
+  const fullContext = allCandidates.reduce((size, entry) => size + entry.text.length + 2, 0) <= maxCharacters;
+  const matched = importedCandidates.filter((entry) => entry.score > 0);
+  const fallback = [];
+  const represented = new Set();
+  for (const entry of importedCandidates) {
+    const documentId = entry.item.documentId ?? entry.id.replace(/-chunk-\d+$/, '');
+    if (!represented.has(documentId)) {
+      fallback.push(entry);
+      represented.add(documentId);
+    }
+  }
+  const boundedImported = [...new Set([...matched, ...fallback, ...importedCandidates])]
     .slice(0, maxImportedItems);
 
-  const ranked = [...manualCandidates, ...importedCandidates]
+  const ranked = (fullContext ? allCandidates : [...manualCandidates, ...boundedImported])
     .sort((left, right) => right.score - left.score || left.index - right.index);
 
   const selected = [];
   let usedCharacters = 0;
   for (const candidate of ranked) {
-    if (selected.length >= maxItems) {
+    if (!fullContext && selected.length >= maxItems) {
       break;
     }
     if (
-      selected.length > 0 &&
-      usedCharacters + candidate.text.length > maxCharacters
+      usedCharacters + candidate.text.length + 2 > maxCharacters
     ) {
       continue;
     }
     selected.push(candidate);
-    usedCharacters += candidate.text.length;
+    usedCharacters += candidate.text.length + 2;
   }
 
   return {
@@ -725,6 +751,8 @@ export function selectKnowledgeContext(
     matchedIds: selected
       .filter((entry) => entry.score > 0)
       .map((entry) => entry.id),
+    retrievalMode: fullContext ? 'full' : matched.length ? 'ranked' : 'fallback',
+    contextCharacters: usedCharacters,
   };
 }
 
@@ -778,19 +806,22 @@ function extractMessageContent(payload) {
   return '';
 }
 
-function parseModelAnswer(content, config) {
+export function parseModelAnswer(content, config) {
+  content = content.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(content);
   const candidate = fenced ? fenced[1] : content;
+  let parsedJson = false;
 
   try {
     const parsed = JSON.parse(candidate);
+    parsedJson = true;
     if (
       parsed &&
       typeof parsed === 'object' &&
       !Array.isArray(parsed) &&
       ['answered', 'no_answer'].includes(parsed.status) &&
-      typeof parsed.answer === 'string' &&
-      (parsed.status === 'no_answer' || parsed.answer.trim())
+      (parsed.status === 'no_answer' ||
+        (typeof parsed.answer === 'string' && parsed.answer.trim()))
     ) {
       const answerStatus = parsed.status;
       return {
@@ -801,8 +832,14 @@ function parseModelAnswer(content, config) {
         answerStatusSource: 'structured',
       };
     }
+    throw modelProviderError('MODEL_INVALID_RESPONSE', '模型返回的回答结构无效。');
   } catch {
     // 兼容暂不支持结构化输出的 OpenAI 兼容服务。
+  }
+
+  // Protocol fragments are not natural-language answers. Never read them aloud.
+  if (parsedJson || fenced || /^[\s`{\[]/.test(content) || /["'](?:status|answer)["']\s*:/.test(content)) {
+    throw modelProviderError('MODEL_INVALID_RESPONSE', '模型返回的回答结构无效。');
   }
 
   const normalizedAnswer = normalizeQuestion(content);
@@ -813,7 +850,7 @@ function parseModelAnswer(content, config) {
   ].map(normalizeQuestion);
   const answerStatus = noAnswerMarkers.some((marker) =>
     normalizedAnswer.startsWith(marker),
-  )
+  ) || /(?:没有|未能|未|暂未)(?:查到|找到|提供|收录)(?:相关|准确|可靠|足够)?(?:信息|资料|内容|答案)|(?:无法|不能|不清楚|不确定)(?:准确|可靠)?(?:回答|确认|确定)|(?:资料|信息|知识)(?:不足|缺失)/u.test(normalizedAnswer)
     ? 'no_answer'
     : 'answered';
   return {
@@ -855,21 +892,35 @@ async function callLanguageModel(config, messages, fetchImplementation) {
     );
   }
 
-  let payload;
-  try {
-    payload = await response.json();
-  } catch {
-    throw modelProviderError(
-      'MODEL_INVALID_RESPONSE',
-      '大语言模型接口返回了无法解析的响应。',
-    );
-  }
-
   if (!response.ok) {
-    throw modelProviderError(
+    const error = modelProviderError(
       'MODEL_UPSTREAM_ERROR',
       `大语言模型接口返回错误（HTTP ${response.status}），请检查 API 地址、Key、模型名和服务额度。`,
     );
+    error.upstreamStatus = response.status;
+    error.failureStage = 'upstream';
+    throw error;
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw modelProviderError(
+      ['TimeoutError', 'AbortError'].includes(cause.name) ? 'MODEL_TIMEOUT' : 'MODEL_INVALID_RESPONSE',
+      '大语言模型接口未返回完整可解析的响应。',
+      ['TimeoutError', 'AbortError'].includes(cause.name) ? 504 : 502,
+    );
+  }
+
+  const finishReason = payload?.choices?.[0]?.finish_reason;
+  if (finishReason === 'length' || finishReason === 'content_filter') {
+    const error = modelProviderError(
+      finishReason === 'length' ? 'MODEL_TRUNCATED_RESPONSE' : 'MODEL_RESPONSE_REJECTED',
+      finishReason === 'length' ? '模型回答被截断，请调大最大输出 Tokens。' : '模型未能提供完整回答。',
+    );
+    error.finishReason = finishReason;
+    error.failureStage = 'response';
+    throw error;
   }
 
   const content = extractMessageContent(payload);
@@ -879,11 +930,15 @@ async function callLanguageModel(config, messages, fetchImplementation) {
       '大语言模型接口没有返回可用文本。',
     );
   }
+  if (Buffer.byteLength(content) > 64 * 1024) {
+    throw modelProviderError('MODEL_INVALID_RESPONSE', '模型回答超过可播报长度。');
+  }
 
   const answer = parseModelAnswer(content, config);
 
   return {
     ...answer,
+    finishReason: typeof finishReason === 'string' ? finishReason.slice(0, 40) : null,
     model: typeof payload.model === 'string' && payload.model.trim()
       ? payload.model.trim()
       : config.model,
@@ -906,7 +961,8 @@ export class ContentStore {
   }
 
   async start() {
-    await this.refresh({ initial: true });
+    // Legacy content is a recoverable backup, no longer an answer dependency.
+    await this.refresh();
     this.timer = setInterval(() => {
       void this.refresh();
     }, this.pollIntervalMs);
@@ -1345,7 +1401,7 @@ export async function buildApp(options = {}) {
     outcome: 'success',
     summary: '服务运行配置已加载',
     details: {
-      version: '0.6.1',
+      version: '0.7.0',
       contentCount: contentStore.items.length,
       knowledgeDocumentCount: knowledgeStore.documents.length,
       hostingScriptCount: liveControlStore.scripts.length,
@@ -1364,7 +1420,7 @@ export async function buildApp(options = {}) {
   const callTrackedModel = async (
     config,
     messages,
-    { trackConnection = true } = {},
+    { trackConnection = true, request = null } = {},
   ) => {
     const startedAt = Date.now();
     try {
@@ -1378,6 +1434,16 @@ export async function buildApp(options = {}) {
       }
       return { ...result, latencyMs };
     } catch (error) {
+      if (request) {
+        request.opsDetails = {
+          ...request.opsDetails,
+          model: config.model,
+          latencyMs: Date.now() - startedAt,
+          upstreamStatus: error.upstreamStatus ?? null,
+          failureStage: error.failureStage ?? (error.code === 'MODEL_CONNECTION_FAILED' || error.code === 'MODEL_TIMEOUT' ? 'transport' : 'response'),
+          finishReason: error.finishReason ?? null,
+        };
+      }
       if (trackConnection && config === modelConfigStore.config) {
         modelConfigStore.markConnectionFailure(error);
       }
@@ -1387,11 +1453,9 @@ export async function buildApp(options = {}) {
 
   const buildAvatarConfig = () => ({
     ...avatarConfigTemplate,
-    quickQuestions: contentStore.items
-      .map((item) => item.questions[0])
-      .filter(Boolean)
-      .slice(0, 3),
-    contentRevision: contentStore.activeHash,
+    quickQuestions: [],
+    serviceErrorText: modelConfigStore.config.serviceErrorText,
+    contentRevision: createHash('sha256').update(knowledgeStore.revision + modelConfigStore.config.serviceErrorText).digest('hex'),
   });
 
   const buildHealthPayload = () => {
@@ -1401,7 +1465,7 @@ export async function buildApp(options = {}) {
     const modelReady =
       modelConfigured && modelConnection.status !== 'unavailable';
     const ready =
-      contentReady && (liveControlStore.mode === 'hosting' || modelReady);
+      liveControlStore.mode === 'hosting' || modelReady;
     const degraded =
       Boolean(contentStore.lastReloadError) ||
       !opsLogStore.publicStatus().ready ||
@@ -1430,6 +1494,7 @@ export async function buildApp(options = {}) {
         loadedAt: knowledgeStore.loadedAt,
       },
       liveControl: {
+        ...liveControlStore.publicLiveState(),
         status: 'current',
         ready: true,
         mode: liveControlStore.mode,
@@ -1457,6 +1522,12 @@ export async function buildApp(options = {}) {
   app.decorate('opsLogStore', opsLogStore);
   app.decorate('adminAuthStore', adminAuthStore);
   const liveClients = new Map();
+  const playbackReports = new Map();
+  const seenClientEvents = new Set();
+  const currentPlaybackReports = () => [...playbackReports.values()].filter((entry) =>
+    entry.instanceId === liveControlStore.instanceId &&
+    entry.commandSequence === liveControlStore.lastCommand?.sequence,
+  );
   const writeLiveEvent = (response, event) => {
     if (response.destroyed || response.writableEnded) {
       return;
@@ -1476,6 +1547,14 @@ export async function buildApp(options = {}) {
     } catch {
       // OpsLogStore already emits a sanitized process-log error.
     }
+  };
+  const redactDialogue = (dialogue, request) => {
+    const secrets = [...(request?.opsRedactions ?? []), modelConfigStore.config.apiKey, adminApiKey, adminPassword].filter(Boolean);
+    return Object.fromEntries(['question', 'answer'].map((key) => {
+      let value = String(dialogue?.[key] ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+      for (const secret of secrets) value = value.split(secret).join('[REDACTED]');
+      return [key, value];
+    }));
   };
   app.addHook('preClose', async () => {
     await recordOpsSafely({
@@ -1498,7 +1577,14 @@ export async function buildApp(options = {}) {
     request.opsStartedAt = process.hrtime.bigint();
     reply.header('Access-Control-Allow-Origin', corsOrigin);
     reply.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Conversation-Id');
+    if (request.method === 'POST' && request.url.split('?')[0] === '/answer') {
+      request.opsRedactions = [modelConfigStore.config.apiKey, adminApiKey, adminPassword].filter(Boolean);
+      const suppliedId = request.headers['x-conversation-id'];
+      request.turnId = typeof suppliedId === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(suppliedId) ? suppliedId : randomUUID();
+      reply.header('X-Conversation-Id', request.turnId);
+      reply.header('X-Request-Id', String(request.id));
+    }
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
     if (corsOrigin !== '*') {
@@ -1556,6 +1642,8 @@ export async function buildApp(options = {}) {
   app.options('/api/ops-logs/download', async (_request, reply) =>
     reply.code(204).send(),
   );
+  app.options('/api/client-events', async (_request, reply) => reply.code(204).send());
+  app.options('/api/knowledge/migrate-legacy', async (_request, reply) => reply.code(204).send());
 
   const hasBearerAccess = (request) =>
     Boolean(
@@ -1590,6 +1678,7 @@ export async function buildApp(options = {}) {
     ['POST /api/admin/logout', { category: 'auth', action: 'admin.logout', label: '管理员退出' }],
     ['PUT /api/content', { category: 'content', action: 'content.save', label: '保存手工内容' }],
     ['POST /api/knowledge/import', { category: 'knowledge', action: 'knowledge.import', label: '导入知识文件' }],
+    ['POST /api/knowledge/migrate-legacy', { category: 'knowledge', action: 'knowledge.migrate', label: '迁入历史内容' }],
     ['DELETE /api/knowledge/:id', { category: 'knowledge', action: 'knowledge.delete', label: '删除知识文件' }],
     ['GET /api/knowledge/:id/download', { category: 'knowledge', action: 'knowledge.download', label: '下载知识原文件' }],
     ['PUT /api/model-config', { category: 'model', action: 'model.save', label: '保存模型设置' }],
@@ -1607,6 +1696,16 @@ export async function buildApp(options = {}) {
     );
 
   app.addHook('onSend', async (request, reply, payload) => {
+    if (request.turnId && typeof payload === 'string') {
+      try {
+        const parsed = JSON.parse(payload);
+        request.opsDialogue = redactDialogue({
+          question: typeof request.body?.question === 'string' ? request.body.question : '',
+          answer: typeof parsed.answer === 'string' ? parsed.answer : parsed.message,
+        }, request);
+        payload = JSON.stringify({ ...parsed, turnId: request.turnId, requestId: String(request.id) });
+      } catch { /* Non-JSON framework errors have no dialogue body. */ }
+    }
     if (
       operationForRequest(request) &&
       reply.statusCode >= 400 &&
@@ -1680,10 +1779,12 @@ export async function buildApp(options = {}) {
       },
       details: {
         ...(request.opsDetails ?? {}),
+        ...(request.turnId ? { turnId: request.turnId } : {}),
         ...(request.opsErrorCode
           ? { errorCode: request.opsErrorCode }
           : {}),
       },
+      ...(request.opsDialogue ? { dialogue: request.opsDialogue } : {}),
     });
   });
 
@@ -1994,7 +2095,7 @@ export async function buildApp(options = {}) {
 
   app.get('/api', async () => ({
     service: '大未来数字人问答 MVP',
-    version: '0.6.1',
+    version: '0.7.0',
     contentCount: contentStore.items.length,
     knowledgeDocumentCount: knowledgeStore.documents.length,
     knowledgeChunkCount: knowledgeStore.chunkCount(),
@@ -2101,9 +2202,59 @@ export async function buildApp(options = {}) {
       ...liveControlStore.publicSnapshot({
         connectedClients: liveClients.size,
       }),
+      playbackReports: currentPlaybackReports(),
       accessMode: request.adminAccessMode,
     }),
   );
+
+  // Visitor execution reports contain only a fixed set of fields. They are
+  // explicitly labelled client-reported, not proof of audible speaker output.
+  app.post('/api/client-events', { bodyLimit: 32 * 1024 }, async (request, reply) => {
+    const body = request.body;
+    const phases = ['request-started', 'request-failed', 'request-cancelled', 'speech-preparing', 'speech-started', 'speech-completed', 'speech-failed', 'speech-cancelled', 'speech-muted', 'speech-unavailable'];
+    const allowed = ['eventId', 'clientId', 'turnId', 'kind', 'phase', 'errorCode', 'durationMs', 'instanceId', 'commandSequence', 'question', 'answer'];
+    const validId = (value) => typeof value === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(value);
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).some((key) => !allowed.includes(key)) ||
+        !validId(body.eventId) || !validId(body.clientId) ||
+        !['dialogue', 'hosting'].includes(body.kind) || !phases.includes(body.phase) ||
+        (body.kind === 'dialogue' && !validId(body.turnId)) ||
+        (body.kind === 'hosting' && (!validId(body.instanceId) || !Number.isInteger(body.commandSequence) || body.commandSequence < 1)) ||
+        (body.errorCode !== undefined && (typeof body.errorCode !== 'string' || !/^[A-Z0-9_-]{1,80}$/.test(body.errorCode))) ||
+        (body.durationMs !== undefined && (!Number.isFinite(body.durationMs) || body.durationMs < 0 || body.durationMs > 86_400_000)) ||
+        (body.question !== undefined && (typeof body.question !== 'string' || [...body.question].length > 500)) ||
+        (body.answer !== undefined && (typeof body.answer !== 'string' || body.answer.length > 2_000))) {
+      return reply.code(400).send({ error: 'CLIENT_EVENT_INVALID', message: '前台执行记录格式无效。' });
+    }
+    if (seenClientEvents.has(body.eventId)) return { ok: true, duplicate: true };
+    const failed = body.phase.endsWith('-failed') || body.phase.endsWith('-unavailable');
+    const skipped = body.phase.endsWith('-cancelled') || body.phase.endsWith('-muted');
+    const { question, answer, ...details } = body;
+    await opsLogStore.record({
+      category: body.kind === 'hosting' ? 'live' : 'question',
+      action: `client.${body.phase}`,
+      outcome: failed ? 'failure' : skipped ? 'rejected' : 'success',
+      summary: `前台上报：${{
+        'request-started': '开始提问', 'request-failed': '问答请求失败', 'request-cancelled': '问答请求取消',
+        'speech-preparing': '准备语音', 'speech-started': '开始播报', 'speech-completed': '播报完成',
+        'speech-failed': '播报失败', 'speech-cancelled': '播报取消', 'speech-muted': '静音未播报',
+        'speech-unavailable': '语音不可用',
+      }[body.phase]}`,
+      details: { ...details, reportedBy: 'browser' },
+      ...(question !== undefined || answer !== undefined ? { dialogue: redactDialogue({ question, answer }) } : {}),
+    });
+    seenClientEvents.add(body.eventId);
+    if (seenClientEvents.size > 2_000) seenClientEvents.delete(seenClientEvents.values().next().value);
+    if (body.kind === 'hosting') {
+      playbackReports.set(body.clientId, {
+        clientId: body.clientId, instanceId: body.instanceId,
+        commandSequence: body.commandSequence, phase: body.phase,
+        errorCode: body.errorCode ?? null, receivedAt: new Date().toISOString(),
+      });
+      if (playbackReports.size > 200) playbackReports.delete(playbackReports.keys().next().value);
+    }
+    return { ok: true };
+  });
 
   app.put(
     '/api/live-control',
@@ -2289,9 +2440,27 @@ export async function buildApp(options = {}) {
     { preHandler: requireAdminAccess },
     async (request) => ({
       ...knowledgeStore.publicSnapshot(),
+      legacyItemCount: contentStore.items.length,
+      legacyActive: false,
       accessMode: request.adminAccessMode,
     }),
   );
+
+  app.post('/api/knowledge/migrate-legacy', { preHandler: requireAdminAccess }, async (request, reply) => {
+    if (request.body?.revision !== contentStore.activeHash) {
+      return reply.code(409).send({ error: 'CONTENT_VERSION_CONFLICT', message: '历史内容已变更，请刷新后再迁入。' });
+    }
+    if (!contentStore.items.length) return knowledgeStore.publicSnapshot();
+    const text = contentStore.items.map((item) => [
+      `## ${item.questions[0]}`, `常见问法：${item.questions.join('；')}`,
+      `关键词：${item.keywords.join('、')}`, item.answer,
+    ].join('\n')).join('\n\n');
+    const result = await knowledgeStore.importFiles([{
+      filename: '历史问答迁移.md', mimetype: 'text/markdown', buffer: Buffer.from(text),
+    }], 'append');
+    request.opsDetails = { importedCount: result.imported.length, legacyItemCount: contentStore.items.length };
+    return result;
+  });
 
   app.post(
     '/api/knowledge/import',
@@ -2436,7 +2605,7 @@ export async function buildApp(options = {}) {
           const connectionResult = await callTrackedModel(
             candidateConfig,
             connectionTestMessages,
-            { trackConnection: false },
+            { trackConnection: false, request },
           );
           return {
             ok: true,
@@ -2478,6 +2647,7 @@ export async function buildApp(options = {}) {
       const result = await callTrackedModel(
         modelConfigStore.config,
         connectionTestMessages,
+        { request },
       );
       request.opsDetails = {
         configured: true,
@@ -2517,6 +2687,12 @@ export async function buildApp(options = {}) {
         mode: liveControlStore.mode,
         questionCharacters: [...request.body.question].length,
       };
+      await recordOpsSafely({
+        category: 'question', action: 'question.received', outcome: 'success',
+        summary: '收到访客提问', request: { id: String(request.id), route: '/answer' },
+        details: { turnId: request.turnId },
+        dialogue: redactDialogue({ question: request.body.question, answer: '' }, request),
+      });
       if (liveControlStore.mode === 'hosting') {
         return reply.code(409).send({
           error: 'HOSTING_MODE_ACTIVE',
@@ -2540,10 +2716,18 @@ export async function buildApp(options = {}) {
       }
 
       const context = selectKnowledgeContext(
-        contentStore.items,
+        [],
         request.body.question,
         { importedChunks: knowledgeStore.importedChunks() },
       );
+      request.opsDetails = {
+        ...request.opsDetails,
+        contextCount: context.contextIds.length,
+        contextIds: context.contextIds,
+        matchedCount: context.matchedIds.length,
+        retrievalMode: context.retrievalMode,
+        contextCharacters: context.contextCharacters,
+      };
       const result = await callTrackedModel(
         modelConfigStore.config,
         buildModelMessages(
@@ -2551,8 +2735,10 @@ export async function buildApp(options = {}) {
           request.body.question,
           context.text,
         ),
+        { request },
       );
       request.opsDetails = {
+        ...request.opsDetails,
         mode: liveControlStore.mode,
         questionCharacters: [...request.body.question].length,
         contextCount: context.contextIds.length,
@@ -2564,6 +2750,7 @@ export async function buildApp(options = {}) {
         answerStatusSource: result.answerStatusSource,
         model: result.model,
         latencyMs: result.latencyMs,
+        finishReason: result.finishReason,
       };
 
       return {
@@ -2576,6 +2763,7 @@ export async function buildApp(options = {}) {
         knowledgeContext: {
           contextIds: context.contextIds,
           matchedIds: context.matchedIds,
+          retrievalMode: context.retrievalMode,
         },
       };
     },
@@ -2652,6 +2840,8 @@ export async function buildApp(options = {}) {
         'MODEL_INVALID_RESPONSE',
         'MODEL_UPSTREAM_ERROR',
         'MODEL_EMPTY_RESPONSE',
+        'MODEL_TRUNCATED_RESPONSE',
+        'MODEL_RESPONSE_REJECTED',
       ].includes(error.code)
     ) {
       if (request.routeOptions?.url === '/answer') {

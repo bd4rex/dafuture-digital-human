@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -182,6 +182,7 @@ export class LiveControlStore {
     this.revision = null;
     this.loadedAt = null;
     this.mode = 'dialogue';
+    this.instanceId = randomUUID();
     this.sequence = 0;
     this.lastCommand = null;
     this.saveInFlight = null;
@@ -219,6 +220,7 @@ export class LiveControlStore {
 
   publicSnapshot({ connectedClients = 0 } = {}) {
     return {
+      ...this.publicLiveState(),
       mode: this.mode,
       sequence: this.sequence,
       scripts: editableScripts(this.scripts),
@@ -231,13 +233,16 @@ export class LiveControlStore {
 
   publicLiveState() {
     return {
+      instanceId: this.instanceId,
       mode: this.mode,
       sequence: this.sequence,
+      commandSequence: this.lastCommand?.sequence ?? null,
     };
   }
 
   syncEvent() {
     return {
+      ...this.publicLiveState(),
       type: 'sync',
       mode: this.mode,
       sequence: this.sequence,
@@ -278,12 +283,8 @@ export class LiveControlStore {
     this.scripts = scripts;
     this.revision = revisionFor(scripts);
     this.loadedAt = this.now().toISOString();
-    if (
-      this.lastCommand &&
-      !this.scripts.some((script) => script.id === this.lastCommand.scriptId)
-    ) {
-      this.lastCommand = null;
-    }
+    // Saving drafts is not a playback command. Only an explicitly sequenced
+    // stop/mode/present operation changes the currently dispatched command.
     return this.publicSnapshot();
   }
 
@@ -304,6 +305,7 @@ export class LiveControlStore {
       this.lastCommand = null;
     }
     return {
+      ...this.publicLiveState(),
       type: 'mode',
       mode,
       sequence: this.sequence,
@@ -331,6 +333,7 @@ export class LiveControlStore {
       issuedAt,
     };
     return {
+      ...this.publicLiveState(),
       type: 'present',
       mode: this.mode,
       sequence: this.sequence,
@@ -343,6 +346,7 @@ export class LiveControlStore {
     this.sequence += 1;
     this.lastCommand = null;
     return {
+      ...this.publicLiveState(),
       type: 'stop',
       mode: this.mode,
       sequence: this.sequence,

@@ -57,10 +57,10 @@ For a local run, the default path is `answer-mvp/model-config.json`. Docker uses
 
 The model settings provide two modes:
 
-- `Use managed content only`: the model may answer only from manual knowledge and imported file knowledge. When the available material is insufficient, the server returns the configured insufficient-knowledge message.
+- `Use managed content only`: the model may answer only from the files visible in Knowledge Management. When the material is insufficient, the server returns the configured insufficient-knowledge message.
 - `Allow general knowledge`: the model prioritizes managed content and may supplement it with general knowledge, but must not invent project-specific dates, locations, fees, people, or rules.
 
-In both modes, manual knowledge and file knowledge are model context rather than final answers returned directly by the API.
+In both modes, imported knowledge is model context rather than a final answer returned directly by the API. Legacy `content.json` entries no longer participate implicitly.
 
 Normal answers follow the configured Answer Style. The model reports whether a reliable answer exists; when it returns `no_answer`, the server discards model-authored refusal copy and uses the administrator's insufficient-knowledge message. If the model is unconfigured, unreachable, times out, or returns an invalid response, the API preserves the relevant HTTP error and code while the avatar displays and speaks the configured service-error message. Technical details remain available only through operations diagnostics.
 
@@ -85,7 +85,9 @@ Select “Operations Logs” in the header to filter recent execution records by
 - Dialogue/Hosting mode switches, hosting-script saves, presentation dispatch, and stop commands.
 - Successful, rejected, and failed Q&A calls.
 
-Each entry includes time, action, request ID, route, actor type, client IP, HTTP status, duration, error code, and only the counts or identifiers needed for diagnosis. Passwords, cookies, Authorization values, API keys, system prompts, answer-style guidance, fallback copy, question/answer text, knowledge contents, and hosting-script text are explicitly excluded.
+Each entry includes time, action, request ID, route, actor, client IP, HTTP status, duration, and error code. Dialogue records retain the full question and returned answer, including fallback text. A `turnId` links receipt, retrieval, model outcomes, and browser playback reports. Upstream HTTP status is recorded separately. Only authenticated administrators may query, search, and download these logs. Credentials and unrelated knowledge/script bodies remain excluded; configured keys and preset passwords appearing in dialogue text are redacted.
+
+Browser reports distinguish preparing, started, completed, failed, cancelled, muted, and unsupported speech. Hosting shows feedback for the current command. These are browser-reported outcomes, not proof of audible speaker output. Offline events are queued in the current tab (up to 200) and retried after connectivity returns; closing a persistently offline tab can lose pending reports. Retention remains three 5 MB files; export periodically for longer retention.
 
 Logs are written to `operations.jsonl` with `0600` permissions. The default retention is 5 MB per file and three files including the current file. The UI exposes only the filename, never the server's absolute path. A presentation log's `connectedClients` is the number of frontends connected when the server dispatched the command; it is not proof that a client speaker completed playback.
 
@@ -104,7 +106,7 @@ The model area supports:
 - Editing answer style, insufficient-knowledge copy, service-error copy, and the role/fact boundary independently.
 - Testing the model connection explicitly.
 
-At answer time, the service selects up to 12 relevant imported chunks within the overall context budget. Filenames remain administration-only and are not presented as source attribution in the visitor interface.
+Small libraries are provided in full within a 24,000-character budget. Larger libraries use synonym-expanded lexical retrieval, selecting up to 12 chunks with a bounded no-match fallback. This demo strategy does not guarantee semantic recall for arbitrary large-library queries. Filenames are not presented as visitor source attribution.
 
 ## Digital-Human Frontend
 
@@ -138,7 +140,9 @@ Preview all four states manually:
 http://127.0.0.1:8080/avatar?preview=1
 ```
 
-See `public/avatar-media/README.en.md` for video replacement instructions. Configure the digital-human name, welcome text, and media paths in `public/avatar-config.json`; manage hosting scripts in the web workbench. Visitor quick questions come from the first phrasing of the first three `content.json` entries and refresh by content revision.
+See `public/avatar-media/README.en.md` for video replacement instructions. Configure the name and media in `public/avatar-config.json`; manage scripts in the workbench. Legacy sample quick questions are disabled. The frontend caches the configured service fallback and attempts speech on network or invalid-response errors; audible output still depends on browser support and sound settings.
+
+Hosting synchronization includes instance IDs, monotonic sequence numbers, and the active command sequence. Old snapshots cannot overwrite newer commands. Disconnects pause playback; reconnecting reconciles missed stops without replaying old scripts. Health polling cannot advance the SSE command sequence. Failed, cancelled, and muted speech are never labelled completed.
 
 ## API Contract
 
@@ -203,6 +207,7 @@ The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-co
 
 - `GET /api/knowledge`: list imported document metadata, extraction previews, and the active revision.
 - `POST /api/knowledge/import`: upload `files` as `multipart/form-data`; `mode` is `append` or `replace`.
+- `POST /api/knowledge/migrate-legacy`: authenticated explicit migration of the supplied legacy revision into a visible knowledge file; preserves the backup.
 - `GET /api/knowledge/:id/download`: download the preserved original.
 - `DELETE /api/knowledge/:id`: delete the original and all extracted chunks.
 
@@ -219,6 +224,7 @@ The model endpoints, `GET/PUT /api/content`, knowledge endpoints, and hosting-co
 
 - `GET /api/ops-logs`: authenticated structured-log query with `limit`, `level`, `category`, `outcome`, and `search` filters.
 - `GET /api/ops-logs/download`: authenticated download of the retained JSONL log range.
+- `POST /api/client-events`: write-only visitor execution reports with fixed fields; log reads remain authenticated.
 
 ### Health and Readiness Endpoints
 
@@ -241,13 +247,13 @@ Before exposing the service publicly, an existing gateway should also provide HT
 
 ## `content.json` Compatibility
 
-The current administration page no longer shows manual question entry, but the service keeps existing `content.json` files and `GET/PUT /api/content` read/write compatible without migrating or deleting their data. If this compatibility content needs maintenance, edit the file directly; the service checks it every two seconds by default:
+Existing `content.json` files and `GET/PUT /api/content` are retained as legacy backups, not active answer sources. The collapsed legacy section in Knowledge Management allows backup download or explicit import into a visible `历史问答迁移.md` knowledge file. Imports are deduplicated. Deleting that file deactivates the migrated knowledge without resurrecting the backup. The original backup is not deleted. Files are checked every two seconds:
 
 - When a new file passes validation, the complete content set is activated atomically.
 - When the new file is invalid, the previous valid content remains active and health status changes to `degraded`.
 - Health status returns to `ready` after the file is corrected.
 
-Each compatibility entry still requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. These fields remain available to model context and visitor quick questions but are no longer exposed as an administration form.
+Each legacy entry still requires a unique `id`, non-empty `questions`, non-empty `keywords`, and an `answer`. An invalid backup does not prevent file-knowledge Q&A from operating.
 
 ## Automated Tests
 
@@ -255,7 +261,7 @@ Each compatibility entry still requires a unique `id`, non-empty `questions`, no
 npm test
 ```
 
-The committed 37 tests cover first-time password setup, cross-origin sign-in and administration, logout, salted hashes, operations-log persistence/filtering/download/redaction/rotation, persistent hosting scripts, mode switching, exact SSE commands, hosting/Q&A exclusion, knowledge import and restart recovery, DOCX/PDF extraction, model rollback, key non-disclosure, error sanitization, content hot reload, the avatar state machine, and video range requests.
+Tests cover administration sessions, full dialogue logs/redaction, upstream 401/429/500 classification, synonym retrieval, explicit legacy migration/deletion, hosting reconnect and stale snapshots, distinct speech outcomes, offline fallbacks, file persistence, model settings, and media ranges. Run `npm test` for current counts. `test/avatar-runtime.test.js` executes actual frontend source in isolation to exercise runtime failure paths.
 
 ## Docker
 

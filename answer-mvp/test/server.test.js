@@ -10,6 +10,9 @@ import {
   HOSTING_MODE_TEXT,
   NO_ANSWER_TEXT,
   SERVICE_ERROR_TEXT,
+  parseModelAnswer,
+  prepareModelConfig,
+  selectKnowledgeContext,
 } from '../server.js';
 import { KnowledgeStore, parseKnowledgeFile } from '../knowledge-store.js';
 import { LiveControlStore } from '../live-control-store.js';
@@ -65,7 +68,7 @@ function createMockLlm({
           ? { error: { message: '上游内部详情不应返回给前台' } }
           : {
               model: responseConfig.model ?? 'mock-model-resolved',
-              choices: [{ message: { content: responseConfig.answer ?? answer } }],
+              choices: [{ message: { content: responseConfig.answer ?? answer }, finish_reason: responseConfig.finishReason }],
             },
       ),
       {
@@ -313,10 +316,8 @@ test('数字人前台和四态配置可直接访问', async (t) => {
     assert.match(stateConfig.sources[0].src, new RegExp(`${state}\\.mov\\?v=`));
     assert.match(stateConfig.sources[1].src, new RegExp(`${state}\\.webm\\?v=`));
   }
-  assert.deepEqual(avatarConfig.quickQuestions, [
-    '培训地点在哪里？',
-    '什么是大未来项目？',
-  ]);
+  assert.deepEqual(avatarConfig.quickQuestions, []);
+  assert.equal(avatarConfig.serviceErrorText, SERVICE_ERROR_TEXT);
   assert.match(avatarConfig.contentRevision, /^[a-f0-9]{64}$/);
 });
 
@@ -510,7 +511,7 @@ test('实时事件流向已连接前台发送模式、主持词和停止指令',
   });
 });
 
-test('运维日志持久记录动作结果和耗时，同时不保存敏感正文', async (t) => {
+test('日志保留每轮问答正文，但不记录密码、知识正文或主持词正文', async (t) => {
   const { app, opsLogPath } = await createTestApp(t);
   const initial = (
     await adminInject(app, { method: 'GET', url: '/api/live-control' })
@@ -639,7 +640,10 @@ test('运维日志持久记录动作结果和耗时，同时不保存敏感正�
   const source = await readFile(opsLogPath, 'utf8');
   assert.doesNotMatch(source, new RegExp(privateScriptText));
   assert.doesNotMatch(source, new RegExp(wrongPassword));
-  assert.doesNotMatch(source, new RegExp(privateQuestion));
+  assert.match(source, new RegExp(privateQuestion));
+  assert.equal(questionLog.dialogue.question, privateQuestion);
+  assert.equal(questionLog.dialogue.answer, SERVICE_ERROR_TEXT);
+  assert.ok(questionLog.details.turnId);
   assert.equal((await stat(opsLogPath)).mode & 0o777, 0o600);
 
   const reloaded = new OpsLogStore({
@@ -701,7 +705,7 @@ test('运维日志脱敏嵌套密钥并按文件大小自动轮转', async (t) =
   assert.equal(snapshot.fileCount, 2);
 });
 
-test('访客快捷问题随兼容内容 API 的保存结果和版本号更新', async (t) => {
+test('历史内容 API 不再生成访客快捷问题或影响文件知识版本', async (t) => {
   const { app } = await createTestApp(t);
   const loaded = (
     await adminInject(app, { method: 'GET', url: '/api/content' })
@@ -718,11 +722,8 @@ test('访客快捷问题随兼容内容 API 的保存结果和版本号更新', 
   const config = (
     await app.inject({ method: 'GET', url: '/avatar-config.json' })
   ).json();
-  assert.deepEqual(config.quickQuestions, [
-    '更新后的培训地点问题？',
-    '什么是大未来项目？',
-  ]);
-  assert.equal(config.contentRevision, saved.json().revision);
+  assert.deepEqual(config.quickQuestions, []);
+  assert.notEqual(config.contentRevision, saved.json().revision);
   assert.notEqual(config.contentRevision, loaded.revision);
 });
 
@@ -760,7 +761,7 @@ test('已登录内容接口返回可编辑内容和版本号', async (t) => {
   assert.equal(body.items[0].source, undefined);
 });
 
-test('兼容内容 API 保存的新内容会进入模型上下文，不直接作为答案返回', async (t) => {
+test('历史内容仅在显式迁入可见知识文件后生效，删除迁移文件后不再生效', async (t) => {
   const mock = createMockLlm({ answer: '模型重新组织后的地点说明。' });
   const { app, contentPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
@@ -789,10 +790,22 @@ test('兼容内容 API 保存的新内容会进入模型上下文，不直接作
   });
   assert.equal(answerResponse.statusCode, 200);
   assert.equal(answerResponse.json().answer, '模型重新组织后的地点说明。');
-  assert.match(
+  assert.doesNotMatch(
     mock.calls.at(-1).body.messages[1].content,
     /通过 Web 页面更新后的测试地点/,
   );
+  const migrated = await adminInject(app, {
+    method: 'POST', url: '/api/knowledge/migrate-legacy',
+    payload: { revision: savedResponse.json().revision },
+  });
+  assert.equal(migrated.statusCode, 200, migrated.body);
+  assert.equal(migrated.json().documents[0].filename, '历史问答迁移.md');
+  await app.inject({ method: 'POST', url: '/answer', payload: { question: '培训地点在哪里？' } });
+  assert.match(mock.calls.at(-1).body.messages[1].content, /通过 Web 页面更新后的测试地点/);
+  await adminInject(app, { method: 'DELETE', url: `/api/knowledge/${migrated.json().documents[0].id}` });
+  await app.inject({ method: 'POST', url: '/answer', payload: { question: '培训地点在哪里？' } });
+  assert.doesNotMatch(mock.calls.at(-1).body.messages[1].content, /通过 Web 页面更新后的测试地点/);
+  assert.equal(JSON.parse(await readFile(contentPath, 'utf8')).length, ORIGINAL_CONTENT.length);
 });
 
 test('外部文件修改不会被 Web 保存静默覆盖', async (t) => {
@@ -1337,6 +1350,7 @@ test('问答通过 OpenAI 兼容接口生成，并携带知识上下文', async 
   });
   const answerStyle = '像现场工作人员一样自然回答，使用两句简短口语。';
   await configureModel(app, { answerStyle });
+  await app.knowledgeStore.importFiles([{ filename: '地点.txt', buffer: Buffer.from('培训地点为测试教室。') }], 'append');
 
   const response = await app.inject({
     method: 'POST',
@@ -1352,10 +1366,9 @@ test('问答通过 OpenAI 兼容接口生成，并携带知识上下文', async 
   assert.equal(body.model, 'mock-model-resolved');
   assert.equal(body.answerStatus, 'answered');
   assert.equal(body.answerStatusSource, 'inferred');
-  assert.deepEqual(body.knowledgeContext, {
-    contextIds: ['training-location', 'project-introduction'],
-    matchedIds: ['training-location'],
-  });
+  assert.equal(body.knowledgeContext.contextIds.length, 1);
+  assert.equal(body.knowledgeContext.matchedIds.length, 1);
+  assert.equal(body.knowledgeContext.retrievalMode, 'full');
   assert.equal(body.references, undefined);
   assert.equal(body.source, undefined);
   assert.equal(mock.calls.at(-1).url, 'https://model.example/v1/chat/completions');
@@ -1508,7 +1521,7 @@ test('空问题、额外字段和无效模型配置会被拒绝', async (t) => {
   assert.equal(emptyFallback.json().error, 'INVALID_MODEL_CONFIG');
 });
 
-test('无效 content.json 不替换上一有效上下文，修复后自动恢复', async (t) => {
+test('历史备份损坏保留上一有效备份，恢复后仍不隐式进入模型上下文', async (t) => {
   const mock = createMockLlm();
   const { app, contentPath } = await createTestApp(t, ORIGINAL_CONTENT, {
     llmFetch: mock.fetch,
@@ -1527,7 +1540,7 @@ test('无效 content.json 不替换上一有效上下文，修复后自动恢复
     url: '/answer',
     payload: { question: '培训地点在哪里？' },
   });
-  assert.match(
+  assert.doesNotMatch(
     mock.calls.at(-1).body.messages[1].content,
     /培训地点为测试教室/,
   );
@@ -1544,9 +1557,101 @@ test('无效 content.json 不替换上一有效上下文，修复后自动恢复
       url: '/answer',
       payload: { question: '培训地点在哪里？' },
     });
-    assert.match(
+    assert.doesNotMatch(
       mock.calls.at(-1).body.messages[1].content,
       /培训地点已更新为测试报告厅/,
     );
+    assert.equal(app.contentStore.items[0].answer, '培训地点已更新为测试报告厅。');
   });
+});
+
+test('小知识库全量上下文覆盖同义问法，大知识库有同义匹配与未命中回退', () => {
+  const importedChunks = [{ id: 'doc-ticket-chunk-1', text: '票价：免费。地址：南京市测试路 88 号。' }];
+  for (const question of ['门票多少钱？', '位置在哪？', '入场要花银子吗？']) {
+    const selected = selectKnowledgeContext([], question, { importedChunks });
+    assert.match(selected.text, /票价：免费/);
+    assert.equal(selected.retrievalMode, 'full');
+  }
+  const large = [
+    ...Array.from({ length: 40 }, (_, i) => ({ id: `doc-noise-${i}-chunk-1`, text: '春季活动。'.repeat(160) })),
+    ...importedChunks,
+  ];
+  const matched = selectKnowledgeContext([], '门票多少钱？', { importedChunks: large });
+  assert.equal(matched.retrievalMode, 'ranked');
+  assert.match(matched.text, /票价：免费/);
+  const fallback = selectKnowledgeContext([], '穿梭飞行器？', { importedChunks: large });
+  assert.equal(fallback.retrievalMode, 'fallback');
+  assert.ok(fallback.contextIds.length > 0);
+  assert.ok(fallback.text.length <= 24_000);
+  assert.ok(fallback.contextIds.length <= 12);
+});
+
+test('缺少 answer 的 no_answer 使用话术，结构异常和 JSON 碎片绝不作为回答', () => {
+  const config = prepareModelConfig({ noAnswerText: '请向工作人员确认。' });
+  assert.equal(parseModelAnswer('{"status":"no_answer"}', config).answer, config.noAnswerText);
+  assert.equal(parseModelAnswer('对不起，我没有找到相关信息，无法回答这个问题。', config).answerStatus, 'no_answer');
+  assert.equal(parseModelAnswer('门票免费。', config).answer, '门票免费。');
+  for (const text of ['{"status":"answered","answer":"未完', '{"answer":"缺少状态"}', '[]', 'null', '```json\nnot json\n```', '结果如下：{"status":"answered"}']) {
+    assert.throws(() => parseModelAnswer(text, config), { code: 'MODEL_INVALID_RESPONSE' });
+  }
+});
+
+test('截断模型输出转入服务兜底，日志保留截断原因和完整兜底答案', async (t) => {
+  const mock = createMockLlm({ responses: [
+    { answer: '连接正常。' },
+    { answer: '{"status":"answered","answer":"未完', finishReason: 'length' },
+  ] });
+  const { app } = await createTestApp(t, ORIGINAL_CONTENT, { llmFetch: mock.fetch });
+  await configureModel(app);
+  const response = await app.inject({ method: 'POST', url: '/answer', payload: { question: '问答正文测试？' } });
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.json().error, 'MODEL_TRUNCATED_RESPONSE');
+  assert.equal(response.json().speechText, SERVICE_ERROR_TEXT);
+  const logs = (await adminInject(app, { method: 'GET', url: '/api/ops-logs?category=question' })).json();
+  const entry = logs.entries.find((item) => item.action === 'question.answer');
+  assert.equal(entry.details.finishReason, 'length');
+  assert.equal(entry.dialogue.question, '问答正文测试？');
+  assert.equal(entry.dialogue.answer, SERVICE_ERROR_TEXT);
+  assert.equal(entry.details.turnId, response.json().turnId);
+});
+
+test('模型 401、429、500 在日志中可区分且失败也保留本轮正文与检索诊断', async (t) => {
+  const mock = createMockLlm({ responses: [{ answer: '连接正常' }, { status: 401 }, { status: 429 }, { status: 500 }] });
+  const { app } = await createTestApp(t, ORIGINAL_CONTENT, { llmFetch: mock.fetch });
+  await configureModel(app);
+  for (const upstreamStatus of [401, 429, 500]) {
+    const response = await app.inject({ method: 'POST', url: '/answer', payload: { question: `第 ${upstreamStatus} 次测试 ${MODEL_REQUEST.apiKey}` } });
+    assert.equal(response.statusCode, 502);
+    const logs = (await adminInject(app, { method: 'GET', url: `/api/ops-logs?search=${response.json().turnId}` })).json();
+    const entry = logs.entries.find((item) => item.action === 'question.answer');
+    assert.equal(entry.details.upstreamStatus, upstreamStatus);
+    assert.equal(entry.details.failureStage, 'upstream');
+    assert.equal(entry.details.model, MODEL_REQUEST.model);
+    assert.equal(entry.details.retrievalMode, 'full');
+    assert.match(entry.dialogue.question, /\[REDACTED\]/);
+    assert.equal(entry.dialogue.answer, SERVICE_ERROR_TEXT);
+    assert.doesNotMatch(JSON.stringify(logs), new RegExp(MODEL_REQUEST.apiKey));
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ops-logs' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ops-logs/download' })).statusCode, 401);
+});
+
+test('前台执行结果关联对话或主持指令，重复上报不重复记账，正文不公开', async (t) => {
+  const { app } = await createTestApp(t);
+  const event = { eventId: 'event-12345678', clientId: 'client-12345678', kind: 'dialogue', turnId: 'turn-12345678', phase: 'request-failed', question: '断网提问', answer: SERVICE_ERROR_TEXT, errorCode: 'CLIENT_CONNECTION_FAILED' };
+  for (let i = 0; i < 2; i++) assert.equal((await app.inject({ method: 'POST', url: '/api/client-events', payload: event })).statusCode, 200);
+  const logs = (await adminInject(app, { method: 'GET', url: '/api/ops-logs?search=turn-12345678' })).json();
+  assert.equal(logs.entries.length, 1);
+  assert.equal(logs.entries[0].dialogue.question, '断网提问');
+  assert.equal(logs.entries[0].outcome, 'failure');
+  const command = app.liveControlStore.present(app.liveControlStore.scripts[0].id);
+  await app.inject({ method: 'POST', url: '/api/client-events', payload: {
+    eventId: 'event-host1234', clientId: event.clientId, kind: 'hosting', phase: 'speech-failed',
+    instanceId: command.instanceId, commandSequence: command.sequence, errorCode: 'SYNTHESIS-FAILED',
+  } });
+  const admin = (await adminInject(app, { method: 'GET', url: '/api/live-control' })).json();
+  assert.equal(admin.playbackReports[0].phase, 'speech-failed');
+  const publicState = (await app.inject({ method: 'GET', url: '/api/live/state' })).json();
+  assert.equal(publicState.playbackReports, undefined);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/client-events', payload: { ...event, password: 'invalid' } })).statusCode, 400);
 });

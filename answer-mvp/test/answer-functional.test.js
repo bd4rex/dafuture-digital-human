@@ -75,6 +75,9 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
     },
   });
   t.after(() => app.close());
+  await app.knowledgeStore.importFiles([{
+    filename: '培训资料.txt', buffer: Buffer.from('培训地点为测试教室。'),
+  }], 'append');
 
   await app.listen({ host: '127.0.0.1', port: 0 });
   const address = app.server.address();
@@ -94,7 +97,8 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
   assert.equal(body.answer, '培训地点为测试教室。');
   assert.equal(body.speechText, body.answer);
   assert.equal(body.model, 'functional-test-model-resolved');
-  assert.deepEqual(body.knowledgeContext.matchedIds, ['training-location']);
+  assert.equal(body.knowledgeContext.matchedIds.length, 1);
+  assert.match(body.knowledgeContext.matchedIds[0], /^doc-.*-chunk-/);
   assert.equal(body.source, undefined);
   assert.equal(body.references, undefined);
 

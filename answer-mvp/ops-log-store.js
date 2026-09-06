@@ -16,7 +16,7 @@ export const OPS_LOG_DEFAULTS = Object.freeze({
   maxFiles: 3,
   defaultQueryLimit: 200,
   maxQueryLimit: 1_000,
-  maxEntryBytes: 32 * 1024,
+  maxEntryBytes: 256 * 1024,
 });
 
 const LEVELS = new Set(['info', 'warning', 'error']);
@@ -123,6 +123,12 @@ function prepareEntry(rawEntry, now) {
     summary,
     request: sanitizeOpsDetails(rawEntry.request ?? {}),
     details: sanitizeOpsDetails(rawEntry.details ?? {}),
+    // Only explicit dialogue records contain bodies. Other diagnostic fields
+    // still pass through the credential/body sanitizer above.
+    ...(rawEntry.dialogue ? { dialogue: {
+      question: String(rawEntry.dialogue.question ?? ''),
+      answer: String(rawEntry.dialogue.answer ?? ''),
+    } } : {}),
   };
 }
 
@@ -159,10 +165,10 @@ export class OpsLogStore {
   async start() {
     if (
       !Number.isInteger(this.maxFileBytes) ||
-      this.maxFileBytes < OPS_LOG_DEFAULTS.maxEntryBytes
+      this.maxFileBytes < 32 * 1024
     ) {
       throw new Error(
-        `运维日志单文件上限不能小于 ${OPS_LOG_DEFAULTS.maxEntryBytes} 字节`,
+        '运维日志单文件上限不能小于 32768 字节',
       );
     }
     if (!Number.isInteger(this.maxFiles) || this.maxFiles < 1 || this.maxFiles > 10) {
@@ -320,6 +326,10 @@ export class OpsLogStore {
         entry.request?.id,
         entry.request?.route,
         entry.details?.errorCode,
+        entry.details?.turnId,
+        entry.details?.commandSequence,
+        entry.dialogue?.question,
+        entry.dialogue?.answer,
       ]
         .filter(Boolean)
         .join(' ')

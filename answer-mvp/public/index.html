@@ -130,6 +130,12 @@
               <button class="button button-quiet button-small" id="refresh-knowledge" type="button">刷新列表</button>
             </div>
             <div class="knowledge-document-list" id="knowledge-document-list"></div>
+            <details id="legacy-content-notice" hidden>
+              <summary id="legacy-content-summary">历史问答备份（不参与回答）</summary>
+              <p class="panel-copy">只有上方列出的知识文件参与回答。历史问答原文件保留；需要使用时，可迁入为一个可预览、下载和删除的知识文件。</p>
+              <button class="button button-quiet button-small" id="migrate-legacy-content" type="button">迁入知识库</button>
+              <button class="button button-quiet button-small" id="download-legacy-content" type="button">下载历史备份</button>
+            </details>
           </section>
         </form>
       </section>
@@ -332,7 +338,7 @@
           </div>
           <button class="dialog-close" id="close-ops-dialog" aria-label="关闭" type="button">×</button>
         </div>
-        <p>查看关键动作的响应结果和执行耗时。系统不会记录密码、API Key、提问正文、回答正文或主持词正文。</p>
+        <p>记录每轮提问和回答全文、响应耗时及前台播报结果，仅后台可查看。密码、API Key 等凭据仍会脱敏。展开“诊断详情”查看正文，按对话编号关联完整过程。</p>
 
         <section class="ops-summary" aria-label="日志摘要">
           <div><strong id="ops-health-state">读取中</strong><span>日志状态</span></div>
@@ -383,8 +389,8 @@
             </select>
           </label>
           <label class="field ops-search-field">
-            <span class="field-label">搜索动作、请求编号或错误码</span>
-            <input id="ops-search" type="search" maxlength="120" placeholder="例如：hosting.present 或 MODEL_TIMEOUT">
+            <span class="field-label">搜索问答正文、对话编号或错误码</span>
+            <input id="ops-search" type="search" maxlength="120" placeholder="输入问题关键词、对话编号或 MODEL_TIMEOUT">
           </label>
           <button class="button button-secondary ops-refresh" id="refresh-ops-logs" type="submit">刷新日志</button>
         </div>

@@ -1,4 +1,4 @@
-import { AvatarFlow, AVATAR_STATES } from './avatar-flow.js';
+import { AvatarFlow, AVATAR_STATES, LiveStateTracker } from './avatar-flow.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   characterName: '大未来',
@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = Object.freeze({
   },
   quickQuestions: [],
   contentRevision: null,
+  serviceErrorText: '抱歉，我现在暂时无法完成查询。请稍后再试，或者请工作人员帮您进一步确认。',
   states: {
     idle: { label: '随时可以开始', hint: '等待你的问题', sources: [] },
     thinking: { label: '正在思考', hint: '正在调用大语言模型', sources: [] },
@@ -85,7 +86,53 @@ const runtime = {
   liveEventSource: null,
   liveConnected: false,
   lastHostedScriptTitle: '',
+  liveTracker: new LiveStateTracker(),
+  hostingCommandSequence: null,
+  speechContext: null,
+  speechStartTimer: null,
+  clientId: createClientId(),
+  eventQueue: [],
+  eventsSending: false,
 };
+
+function createClientId() {
+  return globalThis.crypto?.randomUUID?.() ?? `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function persistClientEvents() {
+  try { sessionStorage.setItem('digital-human-pending-events', JSON.stringify(runtime.eventQueue)); } catch { /* Private mode or quota. */ }
+}
+
+function reportClientEvent(context, phase, extra = {}) {
+  if (!context) return;
+  const { kind, turnId, instanceId, commandSequence } = context;
+  runtime.eventQueue.push({
+    eventId: createClientId(), clientId: runtime.clientId, kind, phase,
+    ...(kind === 'dialogue' ? { turnId } : { instanceId, commandSequence }),
+    ...extra,
+  });
+  if (runtime.eventQueue.length > 200) runtime.eventQueue.shift();
+  persistClientEvents();
+  void flushClientEvents();
+}
+
+async function flushClientEvents() {
+  if (runtime.eventsSending) return;
+  runtime.eventsSending = true;
+  try {
+    while (runtime.eventQueue.length) {
+      const response = await fetch('/api/client-events', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(runtime.eventQueue[0]), keepalive: true,
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok && response.status !== 400) break;
+      runtime.eventQueue.shift();
+      persistClientEvents();
+    }
+  } catch { /* Keep events in this tab and retry when connectivity returns. */ }
+  finally { runtime.eventsSending = false; }
+}
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -696,7 +743,7 @@ function setLiveMode(mode, reason = 'live-mode-changed') {
   return changed;
 }
 
-function beginHostedPresentation(script) {
+function beginHostedPresentation(script, event) {
   if (
     !script ||
     typeof script.title !== 'string' ||
@@ -711,19 +758,39 @@ function beginHostedPresentation(script) {
     cancelActiveInteraction('hosting-command-interrupted');
   }
   runtime.lastHostedScriptTitle = script.title;
+  runtime.hostingCommandSequence = event.sequence;
   elements.hostingScriptTitle.textContent = `正在播报：${script.title}`;
   elements.hostingScriptPreview.textContent = script.text;
   const speechSequence = runtime.flow.beginPresentation();
   appendMessage('assistant', script.text, { hosting: true });
-  speakText(script.text, speechSequence);
+  speakText(script.text, speechSequence, {
+    kind: 'hosting', instanceId: event.instanceId, commandSequence: event.sequence,
+  });
 }
 
 function stopHostedPresentation() {
   setLiveMode('hosting', 'hosting-mode-synchronized');
   cancelActiveInteraction('hosting-command-stopped');
+  runtime.hostingCommandSequence = null;
   elements.hostingScriptTitle.textContent = '当前播报已停止';
   elements.hostingScriptPreview.textContent = '等待后台选择下一段主持词。';
   updateInteractionAvailability();
+}
+
+function applyRemoteLiveState(snapshot) {
+  const accepted = runtime.liveTracker.accept(snapshot);
+  if (!accepted) return null;
+  runtime.liveSequence = snapshot.sequence;
+  if (accepted.restarted) cancelActiveInteraction('live-service-restarted');
+  setLiveMode(snapshot.mode, 'live-control-synchronized');
+  if (runtime.hostingCommandSequence !== null &&
+      (snapshot.commandSequence !== runtime.hostingCommandSequence || accepted.restarted)) {
+    cancelActiveInteraction('hosting-command-synchronized');
+    runtime.hostingCommandSequence = null;
+    elements.hostingScriptTitle.textContent = '已同步当前指令，旧播报已停止';
+    elements.hostingScriptPreview.textContent = '等待后台下发下一段主持词。';
+  }
+  return accepted;
 }
 
 function handleLiveEvent(messageEvent) {
@@ -743,24 +810,16 @@ function handleLiveEvent(messageEvent) {
     return;
   }
 
-  if (event.type === 'sync') {
-    // A lower sequence on a fresh SSE connection means the service restarted.
-    // Runtime mode deliberately resets to dialogue after a restart.
-    runtime.liveSequence = event.sequence;
-    setLiveMode(event.mode, 'live-control-synchronized');
-    void refreshHealth();
-    return;
-  }
-  if (event.sequence <= runtime.liveSequence) {
-    return;
-  }
-  runtime.liveSequence = event.sequence;
+  const accepted = applyRemoteLiveState(event);
+  if (!accepted) return;
+  if (event.type === 'sync') { void refreshHealth(); return; }
+  if (accepted.duplicate) return;
 
   if (event.type === 'mode') {
     setLiveMode(event.mode, 'live-mode-command');
     void refreshHealth();
   } else if (event.type === 'present') {
-    beginHostedPresentation(event.script);
+    beginHostedPresentation(event.script, event);
   } else if (event.type === 'stop') {
     if (event.mode === 'hosting') {
       stopHostedPresentation();
@@ -781,7 +840,7 @@ async function loadLiveState() {
       throw new Error(`HTTP ${response.status}`);
     }
     const snapshot = await response.json();
-    setLiveMode(snapshot.mode, 'initial-live-mode');
+    applyRemoteLiveState(snapshot);
   } catch {
     setServiceStatus('offline', '实时控制状态不可用');
   }
@@ -806,6 +865,12 @@ function connectLiveEvents() {
   });
   eventSource.addEventListener('error', () => {
     runtime.liveConnected = false;
+    if (runtime.liveMode === 'hosting' && runtime.hostingCommandSequence !== null) {
+      cancelActiveInteraction('live-connection-lost');
+      runtime.hostingCommandSequence = null;
+      elements.hostingScriptTitle.textContent = '控制连接中断，已暂停播报';
+      elements.hostingScriptPreview.textContent = '重连后请由后台重新下发，旧主持词不会自动重播。';
+    }
     setServiceStatus('offline', '实时控制正在重新连接');
   });
 }
@@ -819,9 +884,9 @@ async function refreshHealth() {
       throw new Error(`HTTP ${response.status}`);
     }
     const health = await response.json();
-    if (health.liveControl?.mode) {
-      setLiveMode(health.liveControl.mode, 'health-mode-synchronized');
-    }
+    // Health responses must never advance the control sequence ahead of an SSE
+    // present event (otherwise the actual command could be mistaken for a duplicate).
+    if (!('EventSource' in window) && health.liveControl?.mode) applyRemoteLiveState(health.liveControl);
     if (runtime.liveMode === 'hosting') {
       setServiceStatus(
         'online',
@@ -843,8 +908,7 @@ async function refreshHealth() {
     }
 
     if (
-      health.content?.revision &&
-      health.content.revision !== runtime.config.contentRevision
+      health.knowledge?.revision
     ) {
       const nextConfig = await loadConfig(runtime.config);
       if (nextConfig.contentRevision !== runtime.config.contentRevision) {
@@ -960,7 +1024,12 @@ function resizeComposer() {
   )}px`;
 }
 
-function stopSpeech() {
+function stopSpeech(outcome = 'cancelled') {
+  clearTimeout(runtime.speechStartTimer);
+  if (runtime.speechContext) {
+    reportClientEvent(runtime.speechContext, `speech-${outcome}`);
+    runtime.speechContext = null;
+  }
   runtime.speechUtterance = null;
   runtime.activeSpeechSequence = null;
   if ('speechSynthesis' in window) {
@@ -968,13 +1037,24 @@ function stopSpeech() {
   }
 }
 
-function finishSpeechSequence(speechSequence) {
-  const finished = runtime.flow.finishSpeech(speechSequence);
+function finishSpeechSequence(speechSequence, outcome = 'completed', errorCode) {
+  const finished = runtime.flow.finishSpeech(speechSequence, outcome);
+  if (!finished) return false;
+  clearTimeout(runtime.speechStartTimer);
+  if (runtime.speechContext?.speechSequence === speechSequence) {
+    reportClientEvent(runtime.speechContext, `speech-${outcome}`, {
+      durationMs: Math.round(performance.now() - runtime.speechContext.startedAt),
+      ...(errorCode ? { errorCode } : {}),
+    });
+    runtime.speechContext = null;
+  }
   if (finished && runtime.liveMode === 'hosting') {
-    elements.hostingScriptTitle.textContent = runtime.lastHostedScriptTitle
-      ? `播报完成：${runtime.lastHostedScriptTitle}`
-      : '本段主持词已播报完成';
-    elements.hostingScriptPreview.textContent = '等待后台选择下一段主持词。';
+    const labels = { completed: '播报完成', failed: '播报失败', cancelled: '播报已取消', muted: '已静音，未播报', unavailable: '浏览器语音不可用' };
+    elements.hostingScriptTitle.textContent = `${labels[outcome] ?? '播报已结束'}：${runtime.lastHostedScriptTitle}`;
+    elements.hostingScriptPreview.textContent = outcome === 'completed'
+      ? '等待后台选择下一段主持词。' : '请检查声音开关或浏览器语音，再由后台重新播报。';
+  } else if (outcome === 'failed' || outcome === 'unavailable') {
+    elements.composerHint.textContent = '语音未能播放，请阅读屏幕上的回答。';
   }
   return finished;
 }
@@ -1045,12 +1125,11 @@ function speechNumber(name, fallback, minimum, maximum) {
 }
 
 function speakWithBrowser(text, speechSequence) {
-  stopSpeech();
   runtime.activeSpeechSequence = speechSequence;
 
   if (!runtime.soundEnabled) {
     runtime.activeSpeechSequence = null;
-    finishSpeechSequence(speechSequence);
+    finishSpeechSequence(speechSequence, 'muted');
     return;
   }
 
@@ -1059,7 +1138,7 @@ function speakWithBrowser(text, speechSequence) {
     !('SpeechSynthesisUtterance' in window)
   ) {
     runtime.activeSpeechSequence = null;
-    finishSpeechSequence(speechSequence);
+    finishSpeechSequence(speechSequence, 'unavailable', 'SPEECH_UNSUPPORTED');
     return;
   }
 
@@ -1078,6 +1157,8 @@ function speakWithBrowser(text, speechSequence) {
     if (runtime.activeSpeechSequence !== speechSequence) {
       return;
     }
+    clearTimeout(runtime.speechStartTimer);
+    reportClientEvent(runtime.speechContext, 'speech-started');
     startSpeechSequence(speechSequence);
   });
   utterance.addEventListener('end', () => {
@@ -1088,22 +1169,30 @@ function speakWithBrowser(text, speechSequence) {
     runtime.speechUtterance = null;
     finishSpeechSequence(speechSequence);
   });
-  utterance.addEventListener('error', () => {
+  utterance.addEventListener('error', (event) => {
     if (runtime.activeSpeechSequence !== speechSequence) {
       return;
     }
     runtime.activeSpeechSequence = null;
     runtime.speechUtterance = null;
-    finishSpeechSequence(speechSequence);
+    const errorCode = String(event.error || 'SPEECH_FAILED').toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 80);
+    finishSpeechSequence(speechSequence, 'failed', errorCode);
   });
 
   runtime.speechUtterance = utterance;
+  runtime.speechStartTimer = setTimeout(() => {
+    if (runtime.activeSpeechSequence !== speechSequence) return;
+    runtime.activeSpeechSequence = null;
+    runtime.speechUtterance = null;
+    finishSpeechSequence(speechSequence, 'failed', 'SPEECH_START_TIMEOUT');
+    window.speechSynthesis.cancel();
+  }, 8_000);
   try {
     window.speechSynthesis.speak(utterance);
   } catch {
     runtime.activeSpeechSequence = null;
     runtime.speechUtterance = null;
-    finishSpeechSequence(speechSequence);
+    finishSpeechSequence(speechSequence, 'failed', 'SPEECH_EXCEPTION');
   }
 }
 
@@ -1111,7 +1200,10 @@ const speechProviders = Object.freeze({
   browser: speakWithBrowser,
 });
 
-function speakText(text, speechSequence) {
+function speakText(text, speechSequence, context) {
+  stopSpeech();
+  runtime.speechContext = { ...context, speechSequence, startedAt: performance.now() };
+  reportClientEvent(runtime.speechContext, 'speech-preparing');
   runtime.voiceInput?.abort();
   const providerName =
     runtime.config.speech?.provider ?? DEFAULT_CONFIG.speech.provider;
@@ -1119,12 +1211,13 @@ function speakText(text, speechSequence) {
   provider(text, speechSequence);
 }
 
-async function requestAnswer(question, signal) {
+async function requestAnswer(question, signal, turnId) {
   const response = await fetch('/answer', {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      'X-Conversation-Id': turnId,
     },
     body: JSON.stringify({ question }),
     signal,
@@ -1142,6 +1235,9 @@ async function requestAnswer(question, signal) {
       : error.fallbackText;
     throw error;
   }
+  if (typeof payload.answer !== 'string' || !payload.answer.trim() || /^[\s`{\[]/.test(payload.answer)) {
+    throw new Error('INVALID_ANSWER_RESPONSE');
+  }
   return payload;
 }
 
@@ -1157,6 +1253,8 @@ async function askQuestion(question) {
   runtime.requestController = controller;
   const requestSequence = runtime.flow.beginQuestion();
   const startedAt = performance.now();
+  const context = { kind: 'dialogue', turnId: createClientId() };
+  reportClientEvent(context, 'request-started');
 
   appendMessage('user', question);
   const pendingMessage = appendMessage('assistant', '正在调用大语言模型生成回答…', {
@@ -1165,7 +1263,7 @@ async function askQuestion(question) {
   elements.sendButton.disabled = true;
 
   try {
-    const result = await requestAnswer(question, controller.signal);
+    const result = await requestAnswer(question, controller.signal, context.turnId);
     const remainingThinkingTime = 520 - (performance.now() - startedAt);
     if (remainingThinkingTime > 0) {
       await wait(remainingThinkingTime);
@@ -1173,18 +1271,28 @@ async function askQuestion(question) {
 
     const speechSequence = runtime.flow.answerReady(requestSequence);
     if (speechSequence === null) {
+      reportClientEvent(context, 'request-cancelled');
       return;
     }
 
     pendingMessage.remove();
     appendMessage('assistant', result.answer);
-    speakText(result.speechText || result.answer, speechSequence);
+    speakText(result.speechText || result.answer, speechSequence, context);
   } catch (error) {
     if (error.name === 'AbortError') {
+      reportClientEvent(context, 'request-cancelled');
       pendingMessage.remove();
       return;
     }
 
+    if (!error.fallbackText) {
+      error.fallbackText = runtime.config.serviceErrorText || DEFAULT_CONFIG.serviceErrorText;
+      error.speechText = error.fallbackText;
+      reportClientEvent(context, 'request-failed', {
+        errorCode: error.code || 'CLIENT_CONNECTION_FAILED', question,
+        answer: error.fallbackText, durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
     if (error.fallbackText) {
       const remainingThinkingTime = 520 - (performance.now() - startedAt);
       if (remainingThinkingTime > 0) {
@@ -1192,11 +1300,12 @@ async function askQuestion(question) {
       }
       const speechSequence = runtime.flow.answerReady(requestSequence);
       if (speechSequence === null) {
+        reportClientEvent(context, 'request-cancelled');
         return;
       }
       pendingMessage.remove();
       appendMessage('assistant', error.fallbackText, { error: true });
-      speakText(error.speechText || error.fallbackText, speechSequence);
+      speakText(error.speechText || error.fallbackText, speechSequence, context);
       return;
     }
 
@@ -1207,6 +1316,9 @@ async function askQuestion(question) {
       });
     }
   } finally {
+    // A hosting command can arrive after HTTP completes but before audio is
+    // prepared. Discard that stale answer and its pending message together.
+    pendingMessage.remove();
     if (runtime.requestController === controller) {
       runtime.requestController = null;
       elements.sendButton.disabled = runtime.liveMode !== 'dialogue';
@@ -1283,8 +1395,8 @@ function bindEvents() {
 
     if (!runtime.soundEnabled && runtime.activeSpeechSequence !== null) {
       const activeSequence = runtime.activeSpeechSequence;
-      stopSpeech();
-      finishSpeechSequence(activeSequence);
+      finishSpeechSequence(activeSequence, 'muted');
+      stopSpeech('muted');
     }
   });
 
@@ -1303,6 +1415,10 @@ function bindEvents() {
 }
 
 async function start() {
+  try {
+    const pending = JSON.parse(sessionStorage.getItem('digital-human-pending-events') || '[]');
+    if (Array.isArray(pending)) runtime.eventQueue = pending.slice(-200);
+  } catch { /* Invalid or unavailable session storage. */ }
   applyConfig(await loadConfig());
 
   runtime.videoSwitcher = new AvatarVideoSwitcher({
@@ -1333,10 +1449,13 @@ async function start() {
   prepareSpeechVoices();
   resizeComposer();
   updateInteractionAvailability();
-  connectLiveEvents();
   await loadLiveState();
+  connectLiveEvents();
   await refreshHealth();
   setInterval(() => void refreshHealth(), 15_000);
+  setInterval(() => void flushClientEvents(), 5_000);
+  window.addEventListener('online', () => void flushClientEvents());
+  void flushClientEvents();
 }
 
 void start();
