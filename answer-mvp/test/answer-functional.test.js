@@ -46,6 +46,7 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
     modelConfigPath,
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
+    bundledKnowledgeEnabled: false,
     adminAuthPath: path.join(temporaryDirectory, 'admin-auth.json'),
     adminPassword: 'functional-test-admin-password',
     logger: false,

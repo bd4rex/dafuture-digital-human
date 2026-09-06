@@ -1,0 +1,13 @@
+name: dafuture-digital-human
+
+services:
+  digital-human:
+    build: ./answer-mvp
+    ports:
+      - "8080:8080"
+    volumes:
+      - answer-data:/data
+    restart: unless-stopped
+
+volumes:
+  answer-data:

@@ -108,6 +108,14 @@ The model area supports:
 
 Small libraries are provided in full within a 24,000-character budget. Larger libraries use synonym-expanded lexical retrieval, selecting up to 12 chunks with a bounded no-match fallback. This demo strategy does not guarantee semantic recall for arbitrary large-library queries. Filenames are not presented as visitor source attribution.
 
+### Bundled Future Teacher Project Knowledge
+
+First startup automatically links seven topic files and 89 Q&A cards, immediately available for preview, download, and maintenance. They are derived from 27 user-supplied documents (10 PDFs and 17 DOCX files), prepared on September 6, 2026. Training arrangements follow the formal August 24 notice. The current seven files produce 14 chunks and fit within the full-context budget.
+
+Automatic linking appends and deduplicates by SHA-256, retaining existing documents and model settings. Its receipt persists in `knowledge.json`; deletion, replacement, or clearing in the workbench remains effective after restart. Repository upgrades do not overwrite knowledge administered in the workbench. Set `BUNDLED_KNOWLEDGE_ENABLED=false` to disable first-time automatic linking; already imported documents remain under workbench control. Source files live in the application directory's `bundled-knowledge/`, outside the mounted runtime data directory.
+
+See [bundled knowledge documentation](bundled-knowledge/README.en.md) for provenance, version handling, maintenance, and regression limitations. Knowledge readiness is separate from model configuration: complete existing settings are reused, while new deployments still require their own model API configuration.
+
 ## Digital-Human Frontend
 
 The frontend uses four pre-generated transparent videos for four states:
@@ -265,6 +273,14 @@ Tests cover administration sessions, full dialogue logs/redaction, upstream 401/
 
 ## Docker
 
+Run directly from the repository root; Compose builds the image and creates a persistent data volume:
+
+```bash
+docker compose up -d --build
+```
+
+Alternatively, run the existing named-volume setup from `answer-mvp`:
+
 ```bash
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
@@ -273,7 +289,7 @@ docker run --rm -p 8080:8080 \
   dafuture-answer-mvp
 ```
 
-Open the administration page after startup to create the password. The named volume persists manual knowledge, hosting scripts, operations logs, model configuration, the administration-password hash, the file-knowledge index, and imported originals. Never export a volume containing a real key or runtime logs to a public location.
+Open the administration page after startup to create the password. The project library is imported at first startup without manual upload. The named volume persists legacy backups, hosting scripts, operations logs, model configuration, the administration-password hash, the knowledge index, linking receipts, and topic originals. Sources ship at `/app/bundled-knowledge`; an empty writable `/data` bind mount can initialize too. A host directory must be writable by UID 1000. An absent `content.json` is initialized as an empty legacy backup. Never export a volume containing a real key or runtime logs to a public location.
 
 ## Environment Variables
 
@@ -285,6 +301,7 @@ Open the administration page after startup to create the password. The named vol
 | `MODEL_CONFIG_FILE` | `model-config.json` beside the content file | Private model configuration; Docker uses `/data/model-config.json` |
 | `KNOWLEDGE_FILE` | `knowledge.json` beside the content file | Extracted text and chunk index |
 | `KNOWLEDGE_FILES_DIR` | `knowledge-files` beside the index | Preserved imported originals |
+| `BUNDLED_KNOWLEDGE_ENABLED` | `true` | Automatically link the bundled project library once; `false` disables linking without deleting imported documents |
 | `ADMIN_AUTH_FILE` | `admin-auth.json` beside the content file | Salted hash created by first-time setup |
 | `LIVE_CONTROL_FILE` | `host-scripts.json` beside the content file | Persistent scripts; runtime mode and commands are not persisted |
 | `OPS_LOG_FILE` | `operations.jsonl` beside the content file | Persistent structured operations log; Docker uses `/data/operations.jsonl` |

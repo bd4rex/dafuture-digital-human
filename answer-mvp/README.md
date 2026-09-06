@@ -106,6 +106,14 @@ npm start
 
 问答时，小知识库在 24,000 字符预算内全量提供给模型，避免换一种问法就漏掉已有资料。超过预算后使用同义表达扩展与字面相关度排序，最多选取 12 个文件片段；零匹配时也提供有界的资料回退。此方案适合 demo，不保证大型知识库任意语义问法都召回，资料扩大后应专项评估检索。文件名不作为访客端“资料来源”展示。
 
+### 预置未来教师公益计划知识
+
+首次启动自动关联 7 份主题文件、89 张问答卡片，后台可直接预览、下载和维护。资料来自用户提供的 27 份材料（10 份 PDF、17 份 DOCX），整理日为 2026 年 9 月 6 日；具体研修安排采用 8 月 24 日正式通知。当前 7 份文件生成 14 个片段，可在全量上下文预算内检索。
+
+自动关联采用追加和 SHA-256 去重，保留已有知识和模型配置。关联记录随 `knowledge.json` 持久化，后台删除、替换或清空后重启不会自动恢复；升级仓库也不会覆盖后台已维护的知识。设置 `BUNDLED_KNOWLEDGE_ENABLED=false` 可停用首次自动关联，已导入文件仍由后台管理。知识源文件位于应用目录 `bundled-knowledge/`，运行数据目录的挂载不会遮住它。
+
+来源定位、版本处理、维护方式和回归验证边界见 [预置知识库说明](bundled-knowledge/README.md)。知识自动就绪与模型配置分别处理：已有完整连接配置可沿用，全新部署仍需配置自己的模型 API。
+
 ## 数字人前台
 
 前台使用四段预生成透明视频表现四种状态：
@@ -273,6 +281,14 @@ npm run test:capacity
 
 ## Docker 运行
 
+可直接在仓库根目录执行，Compose 会构建镜像并创建持久化数据卷：
+
+```bash
+docker compose up -d --build
+```
+
+也可以在 `answer-mvp` 目录使用原有命名卷方式：
+
 ```bash
 docker build -t dafuture-answer-mvp .
 docker volume create dafuture-answer-data
@@ -281,7 +297,7 @@ docker run --rm -p 8080:8080 \
   dafuture-answer-mvp
 ```
 
-启动后打开管理页设置密码。命名卷同时持久化人工知识、主持词、运维日志、模型配置、管理密码哈希、文件知识索引和原文件。不要把含真实 Key 或运行日志的卷导出到公开位置。
+启动后打开管理页设置密码。首次启动即导入预置项目知识，无须手工上传。命名卷同时持久化历史备份、主持词、运维日志、模型配置、管理密码哈希、知识索引、关联记录和主题原文件。知识源资料随镜像保存在 `/app/bundled-knowledge`，空的可写 `/data` 绑定挂载也能初始化；主机绑定目录需允许 UID 1000 读写，缺少 `content.json` 时自动创建空历史备份。不要把含真实 Key 或运行日志的卷导出到公开位置。
 
 ## 环境变量
 
@@ -293,6 +309,7 @@ docker run --rm -p 8080:8080 \
 | `MODEL_CONFIG_FILE` | 与内容文件同目录的 `model-config.json` | 模型私有配置；Docker 使用 `/data/model-config.json` |
 | `KNOWLEDGE_FILE` | 与内容文件同目录的 `knowledge.json` | 已提取文字与分片索引 |
 | `KNOWLEDGE_FILES_DIR` | 知识索引同目录的 `knowledge-files` | 已导入原文件目录 |
+| `BUNDLED_KNOWLEDGE_ENABLED` | `true` | 首次自动关联预置项目知识；设为 `false` 停用，不删除已导入资料 |
 | `ADMIN_AUTH_FILE` | 与内容文件同目录的 `admin-auth.json` | 首次设置的管理密码加盐哈希 |
 | `LIVE_CONTROL_FILE` | 与内容文件同目录的 `host-scripts.json` | 持久化主持词；运行模式和播报指令不落盘 |
 | `OPS_LOG_FILE` | 与内容文件同目录的 `operations.jsonl` | 持久化结构化运维日志；Docker 使用 `/data/operations.jsonl` |

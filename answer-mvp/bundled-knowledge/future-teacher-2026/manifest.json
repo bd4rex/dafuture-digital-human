@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "future-teacher-2026",
+  "version": "2026.09.06",
+  "title": "未来教师公益计划",
+  "preparedAt": "2026-09-06",
+  "sourceCount": 27,
+  "sourceFormats": {
+    "pdf": 10,
+    "docx": 17
+  },
+  "questionCount": 89,
+  "files": [
+    {
+      "filename": "01_项目概况与政策依据.md",
+      "characters": 3090,
+      "bytes": 7898,
+      "sha256": "a92df40109f36be90b262392d9207994b082aa457e488a360d113a60ab2efd49"
+    },
+    {
+      "filename": "02_研修安排与参与办法.md",
+      "characters": 3527,
+      "bytes": 9035,
+      "sha256": "76e22fe2e494db2cdd48aaf2ecb38770116fb408e41019be1869deed1a33954a"
+    },
+    {
+      "filename": "03_实验室进展与专家指导.md",
+      "characters": 3766,
+      "bytes": 9692,
+      "sha256": "1870f8eb202d75c9daab4c69c6652798ac440ed939fc7b19987b5b653925afaa"
+    },
+    {
+      "filename": "04_南京试点方案与实践.md",
+      "characters": 2543,
+      "bytes": 6431,
+      "sha256": "8c368a5c15d2bfa9e267f5926dd92b4f4bf9101e440bc3bec98c06481042799c"
+    },
+    {
+      "filename": "05_海淀试点方案与实践.md",
+      "characters": 2237,
+      "bytes": 5709,
+      "sha256": "acbccc63ddb81461788cbeda8be0eaf2261fa3759bcb2f52dc28ddef581668b7"
+    },
+    {
+      "filename": "06_长沙试点方案与实践.md",
+      "characters": 2804,
+      "bytes": 7084,
+      "sha256": "4a21376b65c2cc2c5fab33f5349ee19f346f83437c2e318a022f82af929e9e7f"
+    },
+    {
+      "filename": "07_历史节点与统计口径.md",
+      "characters": 2744,
+      "bytes": 6736,
+      "sha256": "5536b35d51ee3e2c310f276626cdcf93fb4c11aee473f1fadd4e23df31f5b5a9"
+    }
+  ]
+}

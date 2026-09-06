@@ -102,6 +102,7 @@ async function createTestApp(t, content = ORIGINAL_CONTENT, options = {}) {
     opsLogPath,
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
     knowledgeFilesDirectory: path.join(temporaryDirectory, 'knowledge-files'),
+    bundledKnowledgeEnabled: false,
     adminPassword,
     pollIntervalMs: 25,
     logger: false,

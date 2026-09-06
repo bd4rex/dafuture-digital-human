@@ -1,5 +1,6 @@
 .DS_Store
 .work_content_proposal/
+/outputs/
 __pycache__/
 *.py[cod]
 *.log

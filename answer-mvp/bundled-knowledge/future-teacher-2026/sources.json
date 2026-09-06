@@ -1,0 +1,380 @@
+[
+  {
+    "source_id": "S01",
+    "filename": "【组长会-04】未来教师公益计划第4次组长会议纪要_20260820.pdf",
+    "format": "pdf",
+    "sha256": "5d38e45747743ed35cd6d7b6b6f404a6efd87d251a9d7bb8014b2e550dd30fee",
+    "metadata": {
+      "date": "2026-08-20",
+      "event_date": "2026-08-20",
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "会议纪要",
+      "note": "同文存在素养框架四维与五维表述差异；拟发布事项不能当作已发布"
+    }
+  },
+  {
+    "source_id": "S02",
+    "filename": "01会议纪要-人工智能教育教学应用实验室第一次组长会0211.pdf",
+    "format": "pdf",
+    "sha256": "b0765b2cf9dba25c7f3b5f8bdb1b6b1352536dfd8a67d05406e0f856cddd511f",
+    "metadata": {
+      "date": null,
+      "event_date": "2026-02-11",
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "早期会议纪要",
+      "note": "正文日期为2月11日；年份由项目上下文推定，正文未完整注明；培训节点属于早期计划"
+    }
+  },
+  {
+    "source_id": "S03",
+    "filename": "未来教师公益计划2026年研修通知.pdf",
+    "format": "pdf",
+    "sha256": "5be68c938ace3e2f8cc05b675596030f87d34098c3f72856a09076f00d4c1e03",
+    "metadata": {
+      "date": "2026-08-24",
+      "event_date": null,
+      "region": "全国",
+      "topic": "研修安排",
+      "status": "盖章正式通知",
+      "note": "日期从第4页盖章落款目视补录；研修时间地点和名额以本通知为依据；第7页名额表人工重建"
+    }
+  },
+  {
+    "source_id": "S04",
+    "filename": "【组长会-03】未来教师公益计划第3次组长会议纪要_20260714.pdf",
+    "format": "pdf",
+    "sha256": "e64a7a75f3b03231b1fd7af643bec9bd8f93419e4c00163fac7c62a2a948f86a",
+    "metadata": {
+      "date": "2026-07-14",
+      "event_date": "2026-07-14",
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "会议纪要",
+      "note": "培训安排已被S03明确；标准为草案，未确认正式发布"
+    }
+  },
+  {
+    "source_id": "S05",
+    "filename": "【试点区-03】未来教师公益计划试点区会议纪要_20260715.pdf",
+    "format": "pdf",
+    "sha256": "ec6607f90bfdb3595b848fc02ddea092060eb6f8f1a8a42a8ebeb2cfd35c4e70",
+    "metadata": {
+      "date": "2026-07-15",
+      "event_date": "2026-07-15",
+      "region": "全国",
+      "topic": "试点进展",
+      "status": "会议纪要",
+      "note": "第10页只有页码；数据保留统计时点，不能作为9月实时数据"
+    }
+  },
+  {
+    "source_id": "S06",
+    "filename": "长沙市试点工作简报_第2期.docx",
+    "format": "docx",
+    "sha256": "3f60be7539e6d2e7683b781d75f1666788235d852b1c8afcf60c73fc8ccf00fc",
+    "metadata": {
+      "date": "2026-05-30",
+      "event_date": null,
+      "region": "长沙",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "第四次调度会日期出现5月28和29两种写法；塘塘名称与S05糖糖不同"
+    }
+  },
+  {
+    "source_id": "S07",
+    "filename": "长沙市试点工作简报_第1期.docx",
+    "format": "docx",
+    "sha256": "a05cbd2fc7efb73549debc9a7ff7e95eb9251faf2ec45501f8987d1616f5ec98",
+    "metadata": {
+      "date": "2026-04-09",
+      "event_date": "2026-03-25",
+      "region": "长沙",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "采用供稿时间；1500账号是当时安排，后续实际分配为900"
+    }
+  },
+  {
+    "source_id": "S08",
+    "filename": "南京市试点工作简报_第2期.docx",
+    "format": "docx",
+    "sha256": "d8336c37593b56e072b909a09a08dc7ae9c30fa6ea112092511e5b3c73ab0996",
+    "metadata": {
+      "date": "2026-05-28",
+      "event_date": null,
+      "region": "南京",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "采用供稿时间；标题一季度与实际4至5月内容不一致"
+    }
+  },
+  {
+    "source_id": "S09",
+    "filename": "南京市试点工作简报_第1期.docx",
+    "format": "docx",
+    "sha256": "aed932fed6c62b673b547ff0110e8733af645a1f1365306f201966dfe6d699fc",
+    "metadata": {
+      "date": "2026-04-09",
+      "event_date": null,
+      "region": "南京",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "采用供稿时间；与S17场景工作坊内容重合"
+    }
+  },
+  {
+    "source_id": "S10",
+    "filename": "海淀区试点工作简报_第2期.docx",
+    "format": "docx",
+    "sha256": "16ab7c1885411344bee561e4358d68282470cd7ec5786621241a0e82eb031ca5",
+    "metadata": {
+      "date": "2026-05-28",
+      "event_date": "2026-05-26",
+      "region": "海淀",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "培训筹备名单人数不等于实际参训人数"
+    }
+  },
+  {
+    "source_id": "S11",
+    "filename": "海淀区试点工作简报_第1期.docx",
+    "format": "docx",
+    "sha256": "fe885415c8c7e3afe3d669674803138955a6c9256eb23c9828a1ad952eb881fa",
+    "metadata": {
+      "date": "2026-04-09",
+      "event_date": "2026-03-11",
+      "region": "海淀",
+      "topic": "区域试点",
+      "status": "阶段简报",
+      "note": "采用供稿时间；政务云资源方案已确定不等于当时已部署"
+    }
+  },
+  {
+    "source_id": "S12",
+    "filename": "秘书处第二季度工作简报0714-第2期.docx",
+    "format": "docx",
+    "sha256": "4cd261441c78a6df7260b7cf4048545b1cbb9a1b0406117062e2469294f67864",
+    "metadata": {
+      "date": "2026-07-07",
+      "event_date": null,
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "阶段简报",
+      "note": "正文落款7月7日，页首7月1日，文件名0714；保留差异。长沙特训人数和名称存在矛盾"
+    }
+  },
+  {
+    "source_id": "S13",
+    "filename": "人工智能教育教学应用实验室秘书处工作情况汇报（2026年7月14日-8月17日）.pdf",
+    "format": "pdf",
+    "sha256": "ab8df884bb9dc66644239107df468f944cbbdb0cea5521ec8302603cba5c388a",
+    "metadata": {
+      "date": "2026-08-18",
+      "event_date": null,
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "阶段汇报",
+      "note": "统计区间7月14日至8月17日；10月徐州安排已被S03通知明确为10月南京"
+    }
+  },
+  {
+    "source_id": "S14",
+    "filename": "第2次组长会会议纪要（基金会审定稿20260610)(1).pdf",
+    "format": "pdf",
+    "sha256": "3528379bcbcbd8daa8471e45d5eeca10c412e455bf1a61e710fcb5d6cb4d3fc3",
+    "metadata": {
+      "date": "2026-06-10",
+      "event_date": "2026-06-05",
+      "region": "全国",
+      "topic": "实验室进展",
+      "status": "审定会议纪要",
+      "note": "6月5日开会，6月10日印发；不可按文件名误定会议日期"
+    }
+  },
+  {
+    "source_id": "S15",
+    "filename": "未来教师公益计划人工智能实验室专家定点指导通知3稿-0626.docx",
+    "format": "docx",
+    "sha256": "eca10913fb3a021c7989e55bdd630e3fd0cce56c8571f7be40ea300f3c9697d1",
+    "metadata": {
+      "date": "2026-06-26",
+      "event_date": null,
+      "region": "全国",
+      "topic": "专家指导",
+      "status": "第三稿 待核实最终附件",
+      "note": "含空文号、抄送与印发机关占位符；S13记载7月28日正式发文，但未提供该正式通知全文"
+    }
+  },
+  {
+    "source_id": "S16",
+    "filename": "260409_试点区沟通会会议纪要.docx",
+    "format": "docx",
+    "sha256": "21aaf45a5ea96d5c2faafc9298ae51f5b25c728bd6eee0e5c30d09f9cae6da70",
+    "metadata": {
+      "date": "2026-04-09",
+      "event_date": "2026-04-09",
+      "region": "全国",
+      "topic": "试点进展",
+      "status": "会议纪要",
+      "note": "平台部署、高价值场景及培训时间均为当时进展或拟定安排"
+    }
+  },
+  {
+    "source_id": "S17",
+    "filename": "260311_未来教师公益计划场景共创工作坊活动在南京举行-新闻稿v0.2.docx",
+    "format": "docx",
+    "sha256": "a2ce2c00500d82d56967de2c40720fd12c202609e669c7b72bc06b84ff168c18",
+    "metadata": {
+      "date": null,
+      "event_date": "2026-03-10",
+      "region": "南京",
+      "topic": "区域试点",
+      "status": "新闻稿 v0.2",
+      "note": "文件名260311为版本线索；正文活动日期3月10日；未据此确认公开发布"
+    }
+  },
+  {
+    "source_id": "S18",
+    "filename": "03-长沙：20260209”未来教师公益计划“人工智能教育教学应用试点区工作方案.docx",
+    "format": "docx",
+    "sha256": "4223cf33e16e2a9cf244f6c0b343d19c2a5e1e094e0a7fb01c78debd7bcebcb8",
+    "metadata": {
+      "date": "2026-02-03",
+      "event_date": null,
+      "region": "长沙",
+      "topic": "区域试点",
+      "status": "工作方案 计划",
+      "note": "正文落款2月3日，文件名20260209；培训预算明细合计90万元一致，但专家伙食费算式与金额不一致；目标不能当完成量"
+    }
+  },
+  {
+    "source_id": "S19",
+    "filename": "02-南京：试点区工作方案 (0205).docx",
+    "format": "docx",
+    "sha256": "36ed99b59113ad0d41faf029976e2095ea35ba8e845e84714107b43e5d66d567",
+    "metadata": {
+      "date": "2026-02-05",
+      "event_date": null,
+      "region": "南京",
+      "topic": "区域试点",
+      "status": "工作方案 计划",
+      "note": "预算为计划；9个组别与后续43个工作坊不是同一统计维度"
+    }
+  },
+  {
+    "source_id": "S20",
+    "filename": "01-未来教师公益计划试点区工作方案-北京海淀.docx",
+    "format": "docx",
+    "sha256": "72fc74f374e36dde185904ac09a971f2eeafbdae09910d9dded1ed4d9664059f",
+    "metadata": {
+      "date": null,
+      "event_date": null,
+      "region": "海淀",
+      "topic": "区域试点",
+      "status": "工作方案 计划 日期未注明",
+      "note": "同文课例目标330与360矛盾；9个文理综合组别与后续10个自然学科组分类不同"
+    }
+  },
+  {
+    "source_id": "S21",
+    "filename": "会议纪要--未来教师公益计划试点区工作部署会.pdf",
+    "format": "pdf",
+    "sha256": "e498f4e77e5fec1b8267a622c433d9e63862a6f75280d06d7a041dba4b2dff4d",
+    "metadata": {
+      "date": null,
+      "event_date": "2026-01-14",
+      "region": "全国",
+      "topic": "部署会历史",
+      "status": "109页详细会议记录 含口语转写",
+      "note": "大量逐字讨论、重复口语及转写疑点。全文保留，默认回答仅采用可交叉验证的概要"
+    }
+  },
+  {
+    "source_id": "S22",
+    "filename": "260114_未来教师公益计划试点工作部署会-新闻稿v0.2.docx",
+    "format": "docx",
+    "sha256": "95a47b7af824896dc28937c052cdb9608c602457b07a72e943009ef1fce631f2",
+    "metadata": {
+      "date": null,
+      "event_date": "2026-01-14",
+      "region": "全国",
+      "topic": "部署会历史",
+      "status": "新闻稿 v0.2",
+      "note": "与S21是同一事件的不同表达，未据此确认公开发布"
+    }
+  },
+  {
+    "source_id": "S23",
+    "filename": "未来教师公益计划项目方案(定稿）.docx",
+    "format": "docx",
+    "sha256": "2e98fe34fc497ac3beffa5bfa90ad6016189269412228ec144600d05c8e80225",
+    "metadata": {
+      "date": "2025-11",
+      "event_date": null,
+      "region": "全国",
+      "topic": "项目政策",
+      "status": "项目方案 定稿",
+      "note": "结构和目标参考；后续正式试点通知S27和研修通知S03优先用于具体安排"
+    }
+  },
+  {
+    "source_id": "S24",
+    "filename": "人工智能教育教学应用实验室工作指引-1228稿.docx",
+    "format": "docx",
+    "sha256": "4773421b51d3c4ed94589b3eb18cabc93c82c30113dfa1e70b77e954a98e48d4",
+    "metadata": {
+      "date": null,
+      "event_date": null,
+      "region": "全国",
+      "topic": "项目政策",
+      "status": "征求意见稿",
+      "note": "1228仅为文件名线索，正文未署年日；五组、73人等不直接作为当前组织事实"
+    }
+  },
+  {
+    "source_id": "S25",
+    "filename": "人工智能赋能教师公益项目方案-放在协议中（1130新稿）.docx",
+    "format": "docx",
+    "sha256": "3c96bb7b3e6f2a79ced412b39cc07c5261a1f4f77b96e7f4cb968b4e0dc9df67",
+    "metadata": {
+      "date": "2025-11",
+      "event_date": null,
+      "region": "全国",
+      "topic": "项目政策",
+      "status": "协议用历史稿",
+      "note": "旧名称人工智能赋能教师；与定稿S23高度重合，内部出现270与300种子教师矛盾"
+    }
+  },
+  {
+    "source_id": "S26",
+    "filename": "未来教师公益计划试点工作部署会的通知.pdf",
+    "format": "pdf",
+    "sha256": "0640a74bc9dfdf1c82cf1dde2ef8e6cc662718839df726909254e5df712153d5",
+    "metadata": {
+      "date": "2026-01-05",
+      "event_date": "2026-01-14",
+      "region": "全国",
+      "topic": "部署会历史",
+      "status": "盖章正式通知 OCR",
+      "note": "3页扫描件；第2页印章落款目视核实；会议时间地点、回执邮箱人工复核"
+    }
+  },
+  {
+    "source_id": "S27",
+    "filename": "教育部教师工作司关于未来教师公益计划试点建设的通知.pdf",
+    "format": "pdf",
+    "sha256": "8c952b0969d155e68f5ac3e440f849a5500b286c27aad61ccc35e72b8c72bfea",
+    "metadata": {
+      "date": "2025-12-31",
+      "event_date": null,
+      "region": "全国",
+      "topic": "项目政策",
+      "status": "盖章正式通知 OCR",
+      "note": "6页扫描件；印章日期、每区2至3校、职责、周期已目视复核"
+    }
+  }
+]

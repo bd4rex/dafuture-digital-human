@@ -376,6 +376,60 @@ function serializableDocuments(documents) {
   }));
 }
 
+function prepareAppliedBundles(rawBundles = []) {
+  if (!Array.isArray(rawBundles)) {
+    throw new Error('knowledge.json.appliedBundles 必须是数组');
+  }
+  const ids = new Set();
+  return Object.freeze(rawBundles.map((bundle, index) => {
+    const location = `appliedBundles[${index}]`;
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+      throw new Error(`${location} 必须是对象`);
+    }
+    const id = validString(bundle.id, `${location}.id`, {
+      pattern: /^[a-z0-9][a-z0-9-]{0,79}$/,
+    });
+    if (ids.has(id)) throw new Error(`重复的预置知识库 ID：${id}`);
+    ids.add(id);
+    return Object.freeze({
+      id,
+      version: validString(bundle.version, `${location}.version`, {
+        pattern: /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/,
+      }),
+      appliedAt: validString(bundle.appliedAt, `${location}.appliedAt`),
+    });
+  }));
+}
+
+function prepareBundleManifest(manifest) {
+  if (!manifest || manifest.schemaVersion !== 1) {
+    throw new Error('预置知识库清单必须使用 schemaVersion 1');
+  }
+  const [bundle] = prepareAppliedBundles([{
+    id: manifest.id, version: manifest.version, appliedAt: new Date().toISOString(),
+  }]);
+  if (!Array.isArray(manifest.files) || manifest.files.length === 0 ||
+      manifest.files.length > KNOWLEDGE_LIMITS.maxFiles) {
+    throw new Error(`预置知识库必须包含 1 至 ${KNOWLEDGE_LIMITS.maxFiles} 个文件`);
+  }
+  const names = new Set();
+  const files = manifest.files.map((file) => {
+    const filename = validString(file?.filename, '预置知识文件名');
+    if (filename.includes('/') || filename.includes('\\') ||
+        filename.includes('\0') || !filename.endsWith('.md') || names.has(filename)) {
+      throw new Error(`预置知识文件名无效或重复：${filename}`);
+    }
+    names.add(filename);
+    return {
+      filename,
+      sha256: validString(file.sha256, '预置知识文件 SHA-256', {
+        pattern: /^[a-f0-9]{64}$/,
+      }),
+    };
+  });
+  return { bundle, files };
+}
+
 function publicDocument(document) {
   return {
     id: document.id,
@@ -405,11 +459,13 @@ async function atomicWrite(targetPath, data) {
 }
 
 export class KnowledgeStore {
-  constructor({ knowledgePath, filesDirectory, logger }) {
+  constructor({ knowledgePath, filesDirectory, bundledKnowledgeDirectory = null, logger }) {
     this.knowledgePath = knowledgePath;
     this.filesDirectory = filesDirectory;
+    this.bundledKnowledgeDirectory = bundledKnowledgeDirectory;
     this.logger = logger;
     this.documents = Object.freeze([]);
+    this.appliedBundles = Object.freeze([]);
     this.revision = null;
     this.loadedAt = null;
     this.mutationQueue = Promise.resolve();
@@ -426,11 +482,14 @@ export class KnowledgeStore {
       }
       await this.persistDocuments([]);
       this.logger.info({ knowledgePath: this.knowledgePath }, '已创建空知识库');
+      await this.importBundledKnowledge();
       return;
     }
 
     try {
-      this.documents = prepareKnowledgeIndex(JSON.parse(serialized));
+      const index = JSON.parse(serialized);
+      this.documents = prepareKnowledgeIndex(index);
+      this.appliedBundles = prepareAppliedBundles(index.appliedBundles);
     } catch (error) {
       throw new Error(`服务启动失败：知识库索引无效：${error.message}`, {
         cause: error,
@@ -446,6 +505,32 @@ export class KnowledgeStore {
       },
       '已加载持久化知识库',
     );
+    await this.importBundledKnowledge();
+  }
+
+  async importBundledKnowledge() {
+    if (!this.bundledKnowledgeDirectory) return;
+    try {
+      const { bundle, files } = prepareBundleManifest(JSON.parse(await readFile(
+        path.join(this.bundledKnowledgeDirectory, 'manifest.json'), 'utf8',
+      )));
+      // A persisted receipt prevents restarts or image updates from undoing admin edits/deletions.
+      if (this.appliedBundles.some((applied) => applied.id === bundle.id)) return;
+      const imports = await Promise.all(files.map(async ({ filename, sha256 }) => {
+        const buffer = await readFile(path.join(this.bundledKnowledgeDirectory, filename));
+        if (createHash('sha256').update(buffer).digest('hex') !== sha256) {
+          throw new Error(`预置知识文件校验失败：${filename}`);
+        }
+        return { filename, buffer };
+      }));
+      await this.importFiles(imports, 'append', { appliedBundle: bundle });
+      this.logger.info(
+        { bundleId: bundle.id, bundleVersion: bundle.version, documentCount: this.documents.length },
+        '预置项目知识已关联并持久化',
+      );
+    } catch (error) {
+      throw new Error(`服务启动失败：无法加载预置知识库：${error.message}`, { cause: error });
+    }
   }
 
   chunkCount() {
@@ -462,6 +547,7 @@ export class KnowledgeStore {
       loadedAt: this.loadedAt,
       documentCount: this.documents.length,
       chunkCount: this.chunkCount(),
+      appliedBundles: this.appliedBundles.map((bundle) => ({ ...bundle })),
       supportedExtensions: [...SUPPORTED_KNOWLEDGE_EXTENSIONS],
       limits: {
         maxFiles: KNOWLEDGE_LIMITS.maxFiles,
@@ -502,20 +588,23 @@ export class KnowledgeStore {
     return result;
   }
 
-  async persistDocuments(documents) {
+  async persistDocuments(documents, appliedBundles = this.appliedBundles) {
+    const preparedBundles = prepareAppliedBundles(appliedBundles);
     const index = {
       version: 1,
       updatedAt: new Date().toISOString(),
       documents: serializableDocuments(documents),
+      appliedBundles: preparedBundles,
     };
     const serialized = `${JSON.stringify(index, null, 2)}\n`;
     await atomicWrite(this.knowledgePath, serialized);
     this.documents = Object.freeze([...documents]);
+    this.appliedBundles = preparedBundles;
     this.revision = createHash('sha256').update(serialized).digest('hex');
     this.loadedAt = new Date().toISOString();
   }
 
-  async importFiles(files, mode = 'append') {
+  async importFiles(files, mode = 'append', { appliedBundle = null } = {}) {
     if (!['append', 'replace'].includes(mode)) {
       throw knowledgeError(
         'KNOWLEDGE_INVALID_MODE',
@@ -634,8 +723,11 @@ export class KnowledgeStore {
             ? [...previousDocuments, ...storedNewDocuments]
             : storedNewDocuments;
 
-        if (accepted.length > 0 || mode === 'replace') {
-          await this.persistDocuments(nextDocuments);
+        if (accepted.length > 0 || mode === 'replace' || appliedBundle) {
+          await this.persistDocuments(
+            nextDocuments,
+            appliedBundle ? [...this.appliedBundles, appliedBundle] : this.appliedBundles,
+          );
         }
 
         if (mode === 'replace') {
