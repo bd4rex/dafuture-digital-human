@@ -36,18 +36,24 @@ done
 encode_standard() {
   local state="$1"
   local input="$2"
+  local start="${3:-0}"
+  local duration="${4:-}"
+  local clip_options=(-ss "${start}")
+  if [[ -n "${duration}" ]]; then
+    clip_options+=(-t "${duration}")
+  fi
 
   ffmpeg -hide_banner -loglevel error -y \
-    -i "${input}" -an \
+    -i "${input}" "${clip_options[@]}" -an \
     -vf "scale=720:960:flags=lanczos,format=yuva420p" \
-    -c:v libvpx-vp9 -b:v 0 -crf 32 -deadline good -cpu-used 2 \
+    -c:v libvpx-vp9 -b:v 0 -crf 30 -deadline good -cpu-used 2 \
     -row-mt 1 -tile-columns 2 -auto-alt-ref 0 -g 60 -pix_fmt yuva420p \
     "${STAGING_DIR}/${state}.webm"
 
   ffmpeg -hide_banner -loglevel error -y \
-    -i "${input}" -an \
+    -i "${input}" "${clip_options[@]}" -an \
     -vf "scale=720:960:flags=lanczos,format=bgra" \
-    -c:v hevc_videotoolbox -allow_sw 1 -alpha_quality 0.65 \
+    -c:v hevc_videotoolbox -allow_sw 1 -alpha_quality 0.8 \
     -tag:v hvc1 -pix_fmt bgra -movflags +faststart \
     "${STAGING_DIR}/${state}.mov"
 }
@@ -61,7 +67,7 @@ encode_thinking() {
     -i "${input}" -an \
     -filter_complex "${forward_filter},scale=720:960:flags=lanczos,format=yuva420p[out]" \
     -map "[out]" \
-    -c:v libvpx-vp9 -b:v 0 -crf 32 -deadline good -cpu-used 2 \
+    -c:v libvpx-vp9 -b:v 0 -crf 30 -deadline good -cpu-used 2 \
     -row-mt 1 -tile-columns 2 -auto-alt-ref 0 -g 60 -pix_fmt yuva420p \
     "${STAGING_DIR}/thinking.webm"
 
@@ -69,15 +75,15 @@ encode_thinking() {
     -i "${input}" -an \
     -filter_complex "${forward_filter},scale=720:960:flags=lanczos,format=bgra[out]" \
     -map "[out]" \
-    -c:v hevc_videotoolbox -allow_sw 1 -alpha_quality 0.65 \
+    -c:v hevc_videotoolbox -allow_sw 1 -alpha_quality 0.8 \
     -tag:v hvc1 -pix_fmt bgra -movflags +faststart \
     "${STAGING_DIR}/thinking.mov"
 }
 
 encode_standard idle "${IDLE_INPUT}"
 encode_thinking "${THINKING_INPUT}"
-encode_standard speaking "${SPEAKING_INPUT}"
-encode_standard presenting "${PRESENTING_INPUT}"
+encode_standard speaking "${SPEAKING_INPUT}" "${SPEAKING_START:-0}" "${SPEAKING_DURATION:-}"
+encode_standard presenting "${PRESENTING_INPUT}" "${PRESENTING_START:-0}" "${PRESENTING_DURATION:-}"
 
 for state in idle thinking speaking presenting; do
   alpha_mode="$(

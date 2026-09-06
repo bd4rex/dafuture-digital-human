@@ -35,12 +35,12 @@
       "hint": "等待你的问题",
       "sources": [
         {
-          "src": "/avatar-media/idle.mov?v=teacher-20260904",
+          "src": "/avatar-media/idle.mov?v=cutout-v6-20260906",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/idle.webm?v=teacher-20260904",
+          "src": "/avatar-media/idle.webm?v=cutout-v6-20260906",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -51,12 +51,12 @@
       "hint": "正在调用大语言模型",
       "sources": [
         {
-          "src": "/avatar-media/thinking.mov?v=teacher-20260904",
+          "src": "/avatar-media/thinking.mov?v=cutout-v6-20260906",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/thinking.webm?v=teacher-20260904",
+          "src": "/avatar-media/thinking.webm?v=cutout-v6-20260906",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -67,12 +67,12 @@
       "hint": "答案播报中",
       "sources": [
         {
-          "src": "/avatar-media/speaking.mov?v=dialogue-mouth-20260905",
+          "src": "/avatar-media/speaking.mov?v=cutout-v6-20260906",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/speaking.webm?v=dialogue-mouth-20260905",
+          "src": "/avatar-media/speaking.webm?v=cutout-v6-20260906",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
@@ -83,12 +83,12 @@
       "hint": "正在进行开场介绍",
       "sources": [
         {
-          "src": "/avatar-media/presenting.mov?v=teacher-20260904",
+          "src": "/avatar-media/presenting.mov?v=cutout-v6-20260906",
           "type": "video/quicktime; codecs=hvc1",
           "platform": "apple"
         },
         {
-          "src": "/avatar-media/presenting.webm?v=teacher-20260904",
+          "src": "/avatar-media/presenting.webm?v=cutout-v6-20260906",
           "type": "video/webm; codecs=vp9",
           "platform": "web"
         }
