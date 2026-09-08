@@ -6,9 +6,9 @@ import { AvatarFlow, AVATAR_STATES, LiveStateTracker } from '../public/avatar-fl
 import { LiveControlStore } from '../live-control-store.js';
 
 const source = (await readFile(new URL('../public/avatar.js', import.meta.url), 'utf8'))
-  .replace(/^import .*;\n/, '').replace(/void start\(\);\s*$/, '');
+  .replace(/^import .*;\n/gm, '').replace(/void start\(\);\s*$/, '');
 
-function fixture(t, fetchOverride) {
+function fixture(t, fetchOverride, { clockStep = 600 } = {}) {
   const element = () => ({ textContent: '', hidden: false, disabled: false, dataset: {},
     classList: { add() {}, remove() {}, toggle() {} }, style: {},
     setAttribute() {}, querySelectorAll() { return []; }, append() {}, remove() { this.removed = true; }, scrollTo() {},
@@ -17,6 +17,7 @@ function fixture(t, fetchOverride) {
   const utterances = [];
   let cancels = 0;
   let now = 0;
+  const timerCalls = [];
   class Utterance {
     constructor(text) { this.text = text; this.handlers = {}; utterances.push(this); }
     addEventListener(name, handler) { this.handlers[name] = handler; }
@@ -24,8 +25,8 @@ function fixture(t, fetchOverride) {
   const context = vm.createContext({
     AvatarFlow, AVATAR_STATES, LiveStateTracker, console, AbortController, AbortSignal,
     SpeechSynthesisUtterance: Utterance,
-    setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref(); return timer; }, clearTimeout,
-    performance: { now: () => (now += 600) },
+    setTimeout: (fn, ms) => { timerCalls.push(ms); const timer = setTimeout(fn, ms); if (ms > 520) timer.unref(); return timer; }, clearTimeout,
+    performance: { now: () => (now += clockStep) },
     sessionStorage: { setItem() {}, getItem() { return null; } },
     document: { querySelector: element, querySelectorAll: () => [], createElement: element, body: { dataset: {} } },
     window: { EventSource: class {}, speechSynthesis: { cancel() { cancels++; }, speak() {}, getVoices: () => [] }, SpeechSynthesisUtterance: Utterance },
@@ -40,7 +41,7 @@ function fixture(t, fetchOverride) {
   api.runtime.flow = new AvatarFlow();
   api.runtime.videoSwitcher = { show() {} };
   t.after(() => api.stopSpeech());
-  return { ...api, events, utterances, get cancels() { return cancels; } };
+  return { ...api, events, utterances, timerCalls, get cancels() { return cancels; } };
 }
 
 function store() {
@@ -109,6 +110,16 @@ test('实际前台：网络失败使用缓存的自然话术并交给语音，�
   assert.equal(app.utterances[0].text, app.runtime.config.serviceErrorText);
   await new Promise(setImmediate);
   assert.ok(app.events.some((event) => event.phase === 'request-failed' && event.question === '门票多少钱？'));
+});
+
+test('实际前台：快速回答仍保留最短思考等待，音频开始前不切说话', async (t) => {
+  const app = fixture(t, async () => ({ ok: true, json: async () => ({ answer: '欢迎来到大未来。' }) }), { clockStep: 500 });
+  await app.askQuestion('你好');
+  assert.ok(app.timerCalls.includes(20));
+  assert.equal(app.utterances[0].text, '欢迎来到大未来。');
+  assert.equal(app.runtime.flow.state, 'thinking');
+  app.utterances[0].handlers.start();
+  assert.equal(app.runtime.flow.state, 'speaking');
 });
 
 test('实际前台：主持指令打断问答后，晚到的回答或兜底不播报且清理等待消息', async (t) => {

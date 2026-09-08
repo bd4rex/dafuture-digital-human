@@ -60,6 +60,7 @@ See [knowledge scope, provenance, and maintenance](answer-mvp/bundled-knowledge/
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
 - Diagnose sign-in, knowledge-file, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
+- New background-embedded MP4s total about 1.88 MB with real-person posters and tap-to-retry. Mobile keeps the composer on screen and adapts to transcript scrolling, the keyboard, and landscape. Pose diagnostics remain at `/avatar?preview=1`; WeChat still needs physical-device acceptance.
 - Allow first-time setup, sign-in, and all authenticated administration APIs from any page origin while retaining server-verified passwords, HttpOnly sessions, and optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds while retaining read compatibility for existing `content.json` data and APIs.
 - Sanitize upstream model errors and replace technical details with speech-ready service fallback copy, without exposing API keys or upstream details.
@@ -102,5 +103,5 @@ Tests cover administration sessions, full dialogue and execution logs, upstream 
 
 - Do not commit `answer-mvp/model-config.json`, `admin-auth.json`, `host-scripts.json`, `operations.jsonl*`, `knowledge.json`, `knowledge-files/`, `.env` files, private keys, or real API keys.
 - Create the administration password on the first visit. If the service is later exposed publicly, place it behind a reverse proxy that provides HTTPS, rate limiting, and an appropriate logging policy.
-- The included avatar videos are technical demo assets and do not represent the final real-person avatar.
+- Current avatar videos use the user-supplied male character and background; original masters remain outside the project. Legacy alpha assets remain for cached pages and explicit rollback only.
 - Public visibility only makes the repository contents viewable. No open-source license is currently included, so no permission to copy, modify, or distribute is granted automatically.

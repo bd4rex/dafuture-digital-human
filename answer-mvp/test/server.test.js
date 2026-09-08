@@ -283,6 +283,12 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   );
   assert.doesNotMatch(pageResponse.body, /你好，我是大未来数字助手/);
   assert.equal((pageResponse.body.match(/data-avatar-video=/g) ?? []).length, 4);
+  assert.equal((pageResponse.body.match(/x5-playsinline="true"/g) ?? []).length, 4);
+  assert.match(pageResponse.body, /viewport-fit=cover/);
+  assert.match(pageResponse.body, /id="avatar-poster"/);
+  assert.match(pageResponse.body, /id="media-retry"/);
+  assert.match(pageResponse.body, /id="preview-panel" hidden/);
+  assert.doesNotMatch(pageResponse.body, /avatar-fallback|内置动画|透明视频未加载/);
   assert.doesNotMatch(pageResponse.body, /资料来源/);
 
   const configResponse = await app.inject({
@@ -292,6 +298,7 @@ test('数字人前台和四态配置可直接访问', async (t) => {
   assert.equal(configResponse.statusCode, 200);
   const avatarConfig = configResponse.json();
   assert.equal(avatarConfig.mediaMode, 'production');
+  assert.equal(avatarConfig.mediaStyle, 'background');
   assert.equal(avatarConfig.characterName, '大未来');
   assert.equal(Object.hasOwn(avatarConfig, 'welcomeText'), false);
   assert.equal(avatarConfig.speech.provider, 'browser');
@@ -313,9 +320,10 @@ test('数字人前台和四态配置可直接访问', async (t) => {
     'presenting',
   ]);
   for (const [state, stateConfig] of Object.entries(avatarConfig.states)) {
-    assert.equal(stateConfig.sources.length, 2);
-    assert.match(stateConfig.sources[0].src, new RegExp(`${state}\\.mov\\?v=`));
-    assert.match(stateConfig.sources[1].src, new RegExp(`${state}\\.webm\\?v=`));
+    assert.equal(stateConfig.sources.length, 1);
+    assert.match(stateConfig.sources[0].src, new RegExp(`${state}\\.mp4\\?v=`));
+    assert.equal(stateConfig.sources[0].type, 'video/mp4');
+    assert.match(stateConfig.poster, new RegExp(`${state}-poster\\.jpg\\?v=`));
   }
   assert.deepEqual(avatarConfig.quickQuestions, []);
   assert.equal(avatarConfig.serviceErrorText, SERVICE_ERROR_TEXT);
@@ -747,6 +755,37 @@ test('透明视频支持 Range 请求并拒绝非白名单文件', async (t) => 
     url: '/avatar-media/config.json',
   });
   assert.equal(disallowed.statusCode, 404);
+});
+
+test('微信兼容 MP4、真人海报与播放器模块可访问，支持 HEAD / Range', async (t) => {
+  const { app } = await createTestApp(t);
+  const script = await app.inject({ method: 'GET', url: '/avatar-media.js' });
+  assert.equal(script.statusCode, 200);
+  assert.match(script.headers['content-type'], /javascript/);
+  assert.match(script.body, /export class AvatarVideoSwitcher/);
+  for (const state of ['idle', 'thinking', 'speaking', 'presenting']) {
+    const url = `/avatar-media/${state}.mp4?v=background-v2-aligned-20260908`;
+    const head = await app.inject({ method: 'HEAD', url });
+    assert.equal(head.statusCode, 200);
+    assert.equal(head.headers['content-type'], 'video/mp4');
+    assert.ok(Number(head.headers['content-length']) < 650_000);
+    assert.equal(head.rawPayload.length, 0);
+    const partial = await app.inject({ method: 'GET', url, headers: { range: 'bytes=0-99' } });
+    assert.equal(partial.statusCode, 206);
+    assert.equal(partial.rawPayload.length, 100);
+    assert.match(partial.headers['content-range'], /^bytes 0-99\/\d+$/);
+    assert.equal(partial.headers['accept-ranges'], 'bytes');
+    assert.equal(partial.rawPayload.subarray(4, 8).toString(), 'ftyp');
+    const invalid = await app.inject({ method: 'GET', url, headers: { range: 'bytes=99999999-' } });
+    assert.equal(invalid.statusCode, 416);
+    const poster = await app.inject({ method: 'GET', url: `/avatar-media/${state}-poster.jpg` });
+    assert.equal(poster.statusCode, 200);
+    assert.equal(poster.headers['content-type'], 'image/jpeg');
+    assert.equal(poster.rawPayload.readUInt16BE(0), 0xffd8);
+  }
+  for (const filename of ['config.json', 'unknown.mp4', 'idle.jpg', 'idle-poster.mp4', 'private-poster.jpg']) {
+    assert.equal((await app.inject({ method: 'GET', url: `/avatar-media/${filename}` })).statusCode, 404);
+  }
 });
 
 test('已登录内容接口返回可编辑内容和版本号', async (t) => {
