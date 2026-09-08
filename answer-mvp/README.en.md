@@ -118,17 +118,19 @@ See [bundled knowledge documentation](bundled-knowledge/README.en.md) for proven
 
 ## Digital-Human Frontend
 
-The frontend uses four pre-generated transparent videos for four states:
+The frontend uses four background-embedded H.264 MP4 clips at 720×960, 30 fps, without audio, totaling about 1.88 MB. Phones initially load idle and its real-person poster (about 0.61 MB). Normal networks prepare speaking during thinking; data-saving networks load only the active pose.
 
 ```text
-Dialogue: question -> thinking -> model answer -> speaking -> idle
+Dialogue: question -> thinking -> model answer (still thinking) -> audio starts -> speaking -> idle
 Administrator enables hosting -> frontend Q&A locks and waits
 Administrator selects a script -> presenting -> exact playback -> hosting standby
 Another script -> immediately interrupts the previous playback
 Stop -> hosting standby; return to dialogue -> Q&A restored
 ```
 
-Speech currently uses the browser's local speech synthesis and prefers Mandarin male voices. macOS/Chrome selects `Reed` first, followed by `Eddy`, `Rocko`, and common Windows male voices such as Yunxi, Yunjian, Yunyang, and Kangkang. Rate and pitch are configured in the `speech` section of `public/avatar-config.json`. If none of these voices is installed, the browser falls back to an available local Chinese voice; use server-side TTS in production when every device must use the same voice. If video is unavailable or the user has enabled reduced motion, the page falls back to lightweight animation while Q&A remains available.
+Speech currently uses the browser's local speech synthesis and prefers Mandarin male voices. macOS/Chrome selects `Reed` first, followed by `Eddy`, `Rocko`, and common Windows male voices such as Yunxi, Yunjian, Yunyang, and Kangkang. Rate and pitch are configured in the `speech` section of `public/avatar-config.json`. If none of these voices is installed, the browser falls back to an available local Chinese voice; use server-side TTS in production when every device must use the same voice. Unavailable video or reduced motion retains a static poster of the same male character. Autoplay restrictions offer tap-to-play, and loading failures offer reload, without preventing Q&A.
+
+The mobile layout keeps the composer on the first screen, scrolls dialogue independently, and adapts to safe areas, keyboard viewport height, and landscape. There is no initial welcome bubble or source label. MP4 removes the alpha-decoding requirement, but playback and speech policies still require target-device WeChat acceptance.
 
 In addition to typing, visitors can click the microphone beside the composer and speak a question. The current implementation uses browser `SpeechRecognition`/`webkitSpeechRecognition` for a single Mandarin turn, displays interim text, and automatically submits the final transcript. The visitor must initiate recording and grant microphone access on first use. Unsupported browsers or denied permission receive a clear message while retaining the complete text-input path. Production should use HTTPS to avoid repeated microphone permission prompts.
 
@@ -148,7 +150,7 @@ Preview all four states manually:
 http://127.0.0.1:8080/avatar?preview=1
 ```
 
-See `public/avatar-media/README.en.md` for video replacement instructions. Configure the name and media in `public/avatar-config.json`; manage scripts in the workbench. Legacy sample quick questions are disabled. The frontend caches the configured service fallback and attempts speech on network or invalid-response errors; audible output still depends on browser support and sound settings.
+The preview retains four test buttons and adds player status / failure diagnostics. See `public/avatar-media/README.en.md` for motion mapping and rebuild instructions. Configure the name, posters, and media in `public/avatar-config.json`; manage scripts in the workbench. Legacy sample quick questions are disabled. The frontend caches the configured service fallback and attempts speech on network or invalid-response errors; audible output still depends on browser support and sound settings.
 
 Hosting synchronization includes instance IDs, monotonic sequence numbers, and the active command sequence. Old snapshots cannot overwrite newer commands. Disconnects pause playback; reconnecting reconciles missed stops without replaying old scripts. Health polling cannot advance the SSE command sequence. Failed, cancelled, and muted speech are never labelled completed.
 

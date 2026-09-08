@@ -1,4 +1,5 @@
 import { AvatarFlow, AVATAR_STATES, LiveStateTracker } from './avatar-flow.js';
+import { AvatarVideoSwitcher } from './avatar-media.js';
 
 const DEFAULT_CONFIG = Object.freeze({
   characterName: '大未来',
@@ -41,7 +42,7 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 
 const DEFAULT_COMPOSER_HINT =
-  '按 Enter 发送，或点击麦克风直接提问 · 回答由后台配置的大语言模型生成';
+  '输入文字或点击麦克风提问 · AI 回答仅供参考';
 
 const elements = {
   servicePill: document.querySelector('#service-pill'),
@@ -54,7 +55,11 @@ const elements = {
   stateHint: document.querySelector('#avatar-state-hint'),
   stage: document.querySelector('#avatar-stage'),
   videos: [...document.querySelectorAll('[data-avatar-video]')],
+  poster: document.querySelector('#avatar-poster'),
   mediaNote: document.querySelector('#media-note'),
+  mediaNoteCopy: document.querySelector('#media-note-copy'),
+  mediaRetry: document.querySelector('#media-retry'),
+  mediaDebug: document.querySelector('#media-debug'),
   avatarName: document.querySelector('#avatar-name'),
   conversationLog: document.querySelector('#conversation-log'),
   quickQuestions: document.querySelector('#quick-question-list'),
@@ -136,253 +141,6 @@ async function flushClientEvents() {
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function isSafariBrowser() {
-  return (
-    navigator.vendor === 'Apple Computer, Inc.' &&
-    /Safari/i.test(navigator.userAgent) &&
-    !/CriOS|FxiOS|EdgiOS/i.test(navigator.userAgent)
-  );
-}
-
-function supportedSources(video, sources) {
-  const isSafari = isSafariBrowser();
-  return [...sources]
-    .filter(
-      (source) =>
-        source &&
-        typeof source.src === 'string' &&
-        (!source.type || video.canPlayType(source.type) !== ''),
-    )
-    .sort((left, right) => {
-      const leftPreferred = isSafari
-        ? left.platform === 'apple'
-        : left.platform !== 'apple';
-      const rightPreferred = isSafari
-        ? right.platform === 'apple'
-        : right.platform !== 'apple';
-      return Number(rightPreferred) - Number(leftPreferred);
-    });
-}
-
-class AvatarVideoSwitcher {
-  constructor({ stage, videos, onFallback }) {
-    this.stage = stage;
-    this.videos = videos;
-    this.videosByState = new Map(
-      videos.map((video) => [video.dataset.avatarVideo, video]),
-    );
-    this.onFallback = onFallback;
-    this.activeVideo = null;
-    this.renderedState = null;
-    this.desiredState = 'idle';
-    this.states = DEFAULT_CONFIG.states;
-    this.switchPromise = null;
-    this.loadJobs = new WeakMap();
-    this.reduceMotion = window.matchMedia(
-      '(prefers-reduced-motion: reduce)',
-    ).matches;
-    const connection =
-      navigator.connection ??
-      navigator.mozConnection ??
-      navigator.webkitConnection;
-    this.allowPreload =
-      !connection?.saveData &&
-      !['slow-2g', '2g'].includes(connection?.effectiveType);
-  }
-
-  configure(states) {
-    this.states = states;
-  }
-
-  show(state) {
-    this.desiredState = state;
-    this.stage.dataset.state = state;
-
-    if (this.reduceMotion) {
-      this.hideVideos();
-      this.renderedState = state;
-      this.onFallback(false);
-      return;
-    }
-
-    if (!this.switchPromise) {
-      this.switchPromise = this.drain().finally(() => {
-        this.switchPromise = null;
-        if (this.renderedState !== this.desiredState) {
-          this.show(this.desiredState);
-        }
-      });
-    }
-  }
-
-  async drain() {
-    while (this.renderedState !== this.desiredState) {
-      const targetState = this.desiredState;
-      await this.switchOnce(targetState);
-      this.renderedState = targetState;
-    }
-  }
-
-  async switchOnce(state) {
-    const stateConfig = this.states[state] ?? DEFAULT_CONFIG.states[state];
-    const nextVideo = this.videosByState.get(state);
-    if (!nextVideo) {
-      this.hideVideos();
-      this.onFallback(true);
-      return;
-    }
-    const candidates = supportedSources(nextVideo, stateConfig.sources ?? []);
-
-    let loaded = false;
-    for (const source of candidates) {
-      loaded = await this.ensureSource(nextVideo, source.src);
-      if (loaded) {
-        break;
-      }
-    }
-
-    if (state !== this.desiredState) {
-      nextVideo.pause();
-      return;
-    }
-
-    if (!loaded) {
-      this.hideVideos();
-      this.onFallback(true);
-      return;
-    }
-
-    try {
-      nextVideo.currentTime = 0;
-      await nextVideo.play();
-    } catch {
-      this.hideVideos();
-      this.onFallback(true);
-      return;
-    }
-
-    const previousVideo = this.activeVideo;
-    nextVideo.classList.add('is-active');
-    this.stage.classList.add('media-ready');
-    this.activeVideo = nextVideo;
-    this.onFallback(false);
-
-    if (previousVideo) {
-      previousVideo.classList.remove('is-active');
-      await wait(240);
-      if (previousVideo !== this.activeVideo) {
-        previousVideo.pause();
-      }
-    }
-
-    if (state === this.desiredState) {
-      const preloadState = {
-        idle: 'thinking',
-        thinking: 'speaking',
-      }[state];
-      if (preloadState) {
-        void this.preloadState(preloadState);
-      }
-    }
-  }
-
-  async preloadState(state) {
-    if (!this.allowPreload || this.reduceMotion) {
-      return;
-    }
-
-    const video = this.videosByState.get(state);
-    if (!video || video === this.activeVideo) {
-      return;
-    }
-
-    const stateConfig = this.states[state] ?? DEFAULT_CONFIG.states[state];
-    const candidates = supportedSources(video, stateConfig.sources ?? []);
-    for (const source of candidates) {
-      if (await this.ensureSource(video, source.src)) {
-        return;
-      }
-    }
-  }
-
-  ensureSource(video, source) {
-    if (
-      video.dataset.mediaSource === source &&
-      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-    ) {
-      return Promise.resolve(true);
-    }
-
-    const existingJob = this.loadJobs.get(video);
-    if (existingJob?.source === source) {
-      return existingJob.promise;
-    }
-    return this.loadSource(video, source);
-  }
-
-  loadSource(video, source) {
-    this.loadJobs.get(video)?.cancel();
-    video.pause();
-    video.classList.remove('is-active');
-    video.removeAttribute('src');
-    video.load();
-    video.dataset.mediaSource = source;
-
-    let cancel = () => {};
-    const loadingPromise = new Promise((resolve) => {
-      let settled = false;
-      const finish = (result) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        video.removeEventListener('loadeddata', handleLoaded);
-        video.removeEventListener('error', handleError);
-        if (!result && video.dataset.mediaSource === source) {
-          delete video.dataset.mediaSource;
-        }
-        resolve(result);
-      };
-      const handleLoaded = () => finish(true);
-      const handleError = () => finish(false);
-      const timeout = setTimeout(() => finish(false), 5_000);
-      cancel = () => finish(false);
-
-      video.addEventListener('loadeddata', handleLoaded, { once: true });
-      video.addEventListener('error', handleError, { once: true });
-      video.src = source;
-      video.load();
-
-      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        finish(true);
-      }
-    });
-
-    const job = {
-      source,
-      cancel: () => cancel(),
-      promise: null,
-    };
-    job.promise = loadingPromise.finally(() => {
-      if (this.loadJobs.get(video) === job) {
-        this.loadJobs.delete(video);
-      }
-    });
-    this.loadJobs.set(video, job);
-    return job.promise;
-  }
-
-  hideVideos() {
-    for (const video of this.videos) {
-      video.classList.remove('is-active');
-      video.pause();
-    }
-    this.activeVideo = null;
-    this.stage.classList.remove('media-ready');
-  }
 }
 
 class BrowserVoiceInput {
@@ -949,13 +707,16 @@ function updateStateUI(state, reason = runtime.flow?.reason) {
   runtime.videoSwitcher.show(state);
 }
 
-function setMediaNote({ fallback = false } = {}) {
-  const showDemoNote = runtime.config.mediaMode === 'demo';
-  elements.mediaNote.hidden = !fallback && !showDemoNote;
-  const copy = elements.mediaNote.querySelector('span:last-child');
-  copy.textContent = fallback
-    ? '透明视频未加载，已切换为内置动画'
-    : '当前为演示视频，可用同名透明真人素材直接替换';
+function setMediaNote({ status = 'loading', reason = '', state = 'idle' } = {}) {
+  const needsRetry = status === 'blocked' || status === 'error';
+  elements.mediaNote.hidden = !needsRetry;
+  elements.mediaRetry.hidden = !needsRetry;
+  elements.mediaNoteCopy.textContent = status === 'blocked'
+    ? '点击启用人物动态'
+    : '人物暂以静态显示，对话仍可使用';
+  elements.mediaRetry.textContent = status === 'blocked' ? '播放人物' : '重新加载';
+  const labels = { loading: '加载中', playing: '播放正常', blocked: '自动播放受限', error: '加载失败', static: '减少动态：静态显示', suspended: '后台已暂停' };
+  elements.mediaDebug.textContent = `视频：${labels[status] ?? status} · ${state}${reason ? ` · ${reason}` : ''}`;
 }
 
 function appendMessage(role, text, options = {}) {
@@ -1353,6 +1114,14 @@ function prepareForVoiceInput() {
   runtime.flow?.reset('voice-input-started');
 }
 
+function syncViewport() {
+  const viewport = window.visualViewport;
+  // Do not resize the app during pinch zoom; keep the page zoomable.
+  if (viewport && Math.abs(viewport.scale - 1) > 0.05) return;
+  document.documentElement.style.setProperty('--app-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`);
+  document.body.classList.toggle('composer-focused', document.activeElement === elements.questionInput);
+}
+
 function bindEvents() {
   elements.questionForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1372,6 +1141,16 @@ function bindEvents() {
   });
 
   elements.questionInput.addEventListener('input', resizeComposer);
+  elements.questionInput.addEventListener('focus', syncViewport);
+  elements.questionInput.addEventListener('blur', () => requestAnimationFrame(syncViewport));
+  window.addEventListener('resize', syncViewport);
+  window.visualViewport?.addEventListener('resize', syncViewport);
+  syncViewport();
+  elements.mediaRetry.addEventListener('click', () => { void runtime.videoSwitcher.retry(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) runtime.videoSwitcher.suspend();
+    else void runtime.videoSwitcher.resume();
+  });
   elements.questionInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -1392,6 +1171,7 @@ function bindEvents() {
     elements.soundLabel.textContent = runtime.soundEnabled
       ? '语音已开启'
       : '语音已关闭';
+    elements.soundToggle.setAttribute('aria-label', runtime.soundEnabled ? '关闭语音播报' : '开启语音播报');
 
     if (!runtime.soundEnabled && runtime.activeSpeechSequence !== null) {
       const activeSequence = runtime.activeSpeechSequence;
@@ -1410,6 +1190,7 @@ function bindEvents() {
     runtime.requestController?.abort();
     runtime.voiceInput?.abort();
     runtime.liveEventSource?.close();
+    runtime.videoSwitcher.dispose();
     stopSpeech();
   });
 }
@@ -1424,7 +1205,8 @@ async function start() {
   runtime.videoSwitcher = new AvatarVideoSwitcher({
     stage: elements.stage,
     videos: elements.videos,
-    onFallback: (fallback) => setMediaNote({ fallback }),
+    poster: elements.poster,
+    onStatus: setMediaNote,
   });
   runtime.videoSwitcher.configure(runtime.config.states);
   runtime.flow = new AvatarFlow(({ state, reason }) =>
@@ -1443,6 +1225,7 @@ async function start() {
 
   if (new URLSearchParams(window.location.search).get('preview') === '1') {
     elements.previewPanel.hidden = false;
+    document.body.dataset.preview = 'true';
   }
 
   bindEvents();

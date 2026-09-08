@@ -35,64 +35,45 @@
       "hint": "等待你的问题",
       "sources": [
         {
-          "src": "/avatar-media/idle.mov?v=cutout-v6-20260906",
-          "type": "video/quicktime; codecs=hvc1",
-          "platform": "apple"
-        },
-        {
-          "src": "/avatar-media/idle.webm?v=cutout-v6-20260906",
-          "type": "video/webm; codecs=vp9",
-          "platform": "web"
+          "src": "/avatar-media/idle.mp4?v=background-v2-aligned-20260908",
+          "type": "video/mp4"
         }
-      ]
+      ],
+      "poster": "/avatar-media/idle-poster.jpg?v=background-v2-aligned-20260908"
     },
     "thinking": {
       "label": "正在思考",
       "hint": "正在调用大语言模型",
       "sources": [
         {
-          "src": "/avatar-media/thinking.mov?v=cutout-v6-20260906",
-          "type": "video/quicktime; codecs=hvc1",
-          "platform": "apple"
-        },
-        {
-          "src": "/avatar-media/thinking.webm?v=cutout-v6-20260906",
-          "type": "video/webm; codecs=vp9",
-          "platform": "web"
+          "src": "/avatar-media/thinking.mp4?v=background-v2-aligned-20260908",
+          "type": "video/mp4"
         }
-      ]
+      ],
+      "poster": "/avatar-media/thinking-poster.jpg?v=background-v2-aligned-20260908"
     },
     "speaking": {
       "label": "正在回答",
       "hint": "答案播报中",
       "sources": [
         {
-          "src": "/avatar-media/speaking.mov?v=cutout-v6-20260906",
-          "type": "video/quicktime; codecs=hvc1",
-          "platform": "apple"
-        },
-        {
-          "src": "/avatar-media/speaking.webm?v=cutout-v6-20260906",
-          "type": "video/webm; codecs=vp9",
-          "platform": "web"
+          "src": "/avatar-media/speaking.mp4?v=background-v2-aligned-20260908",
+          "type": "video/mp4"
         }
-      ]
+      ],
+      "poster": "/avatar-media/speaking-poster.jpg?v=background-v2-aligned-20260908"
     },
     "presenting": {
       "label": "主持模式",
       "hint": "正在进行开场介绍",
       "sources": [
         {
-          "src": "/avatar-media/presenting.mov?v=cutout-v6-20260906",
-          "type": "video/quicktime; codecs=hvc1",
-          "platform": "apple"
-        },
-        {
-          "src": "/avatar-media/presenting.webm?v=cutout-v6-20260906",
-          "type": "video/webm; codecs=vp9",
-          "platform": "web"
+          "src": "/avatar-media/presenting.mp4?v=background-v2-aligned-20260908",
+          "type": "video/mp4"
         }
-      ]
+      ],
+      "poster": "/avatar-media/presenting-poster.jpg?v=background-v2-aligned-20260908"
     }
-  }
+  },
+  "mediaStyle": "background"
 }

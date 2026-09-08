@@ -19,7 +19,7 @@ const DEFAULT_PUBLIC_PATH = path.join(MODULE_DIR, 'public');
 const DEFAULT_BUNDLED_KNOWLEDGE_PATH = path.join(
   MODULE_DIR, 'bundled-knowledge', 'future-teacher-2026',
 );
-const AVATAR_MEDIA_FILENAME = /^(idle|thinking|speaking|presenting)\.(webm|mov)$/;
+const AVATAR_MEDIA_FILENAME = /^(idle|thinking|speaking|presenting)(\.(webm|mov|mp4)|-poster\.jpg)$/;
 
 const LEGACY_NO_ANSWER_TEXT = '当前内容中暂无相关信息。';
 export const NO_ANSWER_TEXT =
@@ -1234,6 +1234,7 @@ export async function buildApp(options = {}) {
     avatarStylesheet,
     avatarScript,
     avatarFlowScript,
+    avatarMediaScript,
     avatarConfigSource,
   ] = await Promise.all([
     readFile(path.join(publicPath, 'index.html'), 'utf8'),
@@ -1245,6 +1246,7 @@ export async function buildApp(options = {}) {
     readFile(path.join(publicPath, 'avatar.css'), 'utf8'),
     readFile(path.join(publicPath, 'avatar.js'), 'utf8'),
     readFile(path.join(publicPath, 'avatar-flow.js'), 'utf8'),
+    readFile(path.join(publicPath, 'avatar-media.js'), 'utf8'),
     readFile(path.join(publicPath, 'avatar-config.json'), 'utf8'),
   ]);
 
@@ -1901,6 +1903,13 @@ export async function buildApp(options = {}) {
       .send(avatarFlowScript),
   );
 
+  app.get('/avatar-media.js', async (_request, reply) =>
+    reply
+      .header('Cache-Control', 'no-cache')
+      .type('text/javascript; charset=utf-8')
+      .send(avatarMediaScript),
+  );
+
   app.get('/avatar-config.json', async (_request, reply) =>
     reply
       .header('Cache-Control', 'no-store')
@@ -1977,9 +1986,7 @@ export async function buildApp(options = {}) {
       });
     }
 
-    const contentType = filename.endsWith('.webm')
-      ? 'video/webm'
-      : 'video/quicktime';
+    const contentType = { '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp4': 'video/mp4', '.jpg': 'image/jpeg' }[path.extname(filename)];
     const range = parseByteRange(request.headers.range, mediaStat.size);
 
     reply
