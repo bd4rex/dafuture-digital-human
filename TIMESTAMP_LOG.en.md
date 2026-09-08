@@ -218,3 +218,9 @@
 - Scope: publish background-embedded H.264 videos, per-pose framing alignment, recoverable media playback, mobile layout and four-state preview improvements, plus automated tests, the rebuild script, and bilingual documentation. Model configuration and business data remain unchanged.
 - Preflight: all 69 automated tests pass again; production dependency audit reports zero known vulnerabilities. Shell / JavaScript syntax and diff-format checks pass. Added text files and changed lines contain no detected common tokens, private keys, credential-bearing URLs, or local user-directory paths. Runtime configuration, administration authentication, the knowledge index, hosting scripts, and test screenshots remain ignored by Git.
 - Boundary: this release targets GitHub `main` only, without hosted deployment operations. Phone-sized browser viewports do not replace Xiaomi 15 WeChat physical-device acceptance.
+
+## 2026-09-08 21:54 +0800
+
+- Release completed: feature commit `1da074781e47417e6ad098fb656cbc33bcfe50c2` was merged into GitHub `main` through [PR #2](https://github.com/bd4rex/dafuture-digital-human/pull/2) as `ee422fe37fe66596a809645954ad4b263a306e89`. GitHub reports the PR as merged, and local `main` was fast-forwarded to the merge commit.
+- Published scope: background-embedded videos, aligned four-pose framing, recoverable playback, and mobile layout improvements are now on `main`. All 69 tests pass and the production dependency audit reports zero known vulnerabilities. No GitHub CI checks were configured; the merge relied on local validation.
+- Handoff boundary: private runtime settings and test screenshots were not uploaded; no hosted deployment was performed. The local service remains running. Physical-device WeChat first load, four-pose switching, and soft-keyboard behavior still require post-deployment acceptance.
