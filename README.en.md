@@ -81,6 +81,7 @@ TIMESTAMP_LOG.md                  Project change and verification log
 ## Documentation
 
 - [Runtime and deployment (中文)](answer-mvp/README.md) / [English](answer-mvp/README.en.md)
+- [External model integration and AI handoff (中文)](answer-mvp/EXTERNAL_MODEL_INTEGRATION.md) / [English](answer-mvp/EXTERNAL_MODEL_INTEGRATION.en.md)
 - [Bundled knowledge (中文)](answer-mvp/bundled-knowledge/README.md) / [English](answer-mvp/bundled-knowledge/README.en.md)
 - [Avatar video media (中文)](answer-mvp/public/avatar-media/README.md) / [English](answer-mvp/public/avatar-media/README.en.md)
 - [Project timestamp log (中文)](TIMESTAMP_LOG.md) / [English](TIMESTAMP_LOG.en.md)

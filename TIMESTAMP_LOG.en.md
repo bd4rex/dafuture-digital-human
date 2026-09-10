@@ -224,3 +224,17 @@
 - Release completed: feature commit `1da074781e47417e6ad098fb656cbc33bcfe50c2` was merged into GitHub `main` through [PR #2](https://github.com/bd4rex/dafuture-digital-human/pull/2) as `ee422fe37fe66596a809645954ad4b263a306e89`. GitHub reports the PR as merged, and local `main` was fast-forwarded to the merge commit.
 - Published scope: background-embedded videos, aligned four-pose framing, recoverable playback, and mobile layout improvements are now on `main`. All 69 tests pass and the production dependency audit reports zero known vulnerabilities. No GitHub CI checks were configured; the merge relied on local validation.
 - Handoff boundary: private runtime settings and test screenshots were not uploaded; no hosted deployment was performed. The local service remains running. Physical-device WeChat first load, four-pose switching, and soft-keyboard behavior still require post-deployment acceptance.
+
+## 2026-09-10 21:02 +0800
+
+- Task: produce an external-model integration document suitable for another AI developer, verified against `8741f25` with package version `0.8.0`.
+- Documents: add separate Chinese and English `answer-mvp/EXTERNAL_MODEL_INTEGRATION.md` and `.en.md`. Distinguish existing LLM, browser speech, and prerecorded video from proposed external ASR/TTS, audio caching, and new endpoints.
+- Handoff scope: code entry points, private configuration, request/response examples, provider adapters, exact-script audio preparation/approval, cancellation and reconnect behavior, natural fallbacks, correlated logs, Docker copying/persistence, acceptance matrix, and a copyable AI implementation task. Update both documentation indexes.
+- Verification: all 69 current automated tests passed. JSON examples, local links, code fences, and corresponding document sections passed checks. Official vendor/browser documentation was consulted; no real account validation or paid model invocation occurred.
+- Boundary: Markdown-only additions/edits. No runtime code, business data, keys, or deployment changes; no commit or GitHub push.
+
+## 2026-09-10 21:08 +0800
+
+- Release preparation: at the user's request, publish the separate Chinese/English external-model integration guides, documentation indexes, and this log to `main` at `https://github.com/bd4rex/dafuture-digital-human`. Local and remote both started at `8741f25` without divergence; no separate feature-branch merge is required.
+- Checks: validated 75 local links across 8 Markdown files, 6 JSON examples, and 15 corresponding sections per guide. All 69 existing automated tests passed again, as did patch-format checks.
+- Boundary: documentation only, with no application-version, runtime-code, configuration, knowledge, hosting-script, or deployment changes. The external-speech interfaces remain explicitly proposed rather than implemented. Runtime credentials and data are excluded.

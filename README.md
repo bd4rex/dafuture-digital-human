@@ -81,6 +81,7 @@ TIMESTAMP_LOG.md                  项目变更与验证记录
 ## 文档
 
 - [运行与部署说明（中文）](answer-mvp/README.md) / [English](answer-mvp/README.en.md)
+- [外部模型接入与 AI 开发交接（中文）](answer-mvp/EXTERNAL_MODEL_INTEGRATION.md) / [English](answer-mvp/EXTERNAL_MODEL_INTEGRATION.en.md)
 - [预置知识库说明（中文）](answer-mvp/bundled-knowledge/README.md) / [English](answer-mvp/bundled-knowledge/README.en.md)
 - [数字人视频素材说明（中文）](answer-mvp/public/avatar-media/README.md) / [English](answer-mvp/public/avatar-media/README.en.md)
 - [项目时间戳日志（中文）](TIMESTAMP_LOG.md) / [English](TIMESTAMP_LOG.en.md)

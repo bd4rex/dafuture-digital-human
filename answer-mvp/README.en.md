@@ -136,11 +136,13 @@ In addition to typing, visitors can click the microphone beside the composer and
 
 ### External Speech Provider Boundary
 
+For an executable AI handoff with the current code map, proposed API contracts, and acceptance checklist, see [External Model Integration and AI Developer Handoff](EXTERNAL_MODEL_INTEGRATION.en.md). The proposed server-side speech endpoints are not implemented yet.
+
 Both `speech.provider` and `speechInput.provider` in `public/avatar-config.json` currently use `browser`. Playback and recognition are separated behind provider entry points so a future external model can retain these boundaries:
 
 - An ASR provider converts one recording into the final question text, then reuses the existing form submission and Q&A flow.
 - A TTS provider converts `speechText` into playable audio and drives the existing avatar state machine through start, end, and cancellation events.
-- Third-party API keys remain server-side; the browser calls only same-origin proxy endpoints and never holds provider credentials.
+- Third-party API keys remain server-side; the browser calls this project's speech proxy and never holds provider credentials. This does not require restoring the removed administration-origin restrictions.
 - Browser recognition may use a vendor-operated remote service and must not be assumed to run locally. Choose and configure production ASR according to privacy requirements before handling sensitive student or visitor information.
 - The browser provider can remain as a fallback, while identical voice-and-text output can be cached by hash to reduce latency and provider cost.
 
