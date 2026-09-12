@@ -13,7 +13,7 @@ This repository contains a locally runnable digital-human Q&A prototype. Content
 - Model settings now separate answer style, insufficient-knowledge copy, and service-error copy. The model composes normal answers, while the server returns predictable, speech-ready fallback text.
 - Hosting scripts persist on the server. Mode, present, and stop commands synchronize to every open avatar frontend through SSE; a new command interrupts the previous script, while a service restart does not replay it.
 - Authenticated logs retain full questions and answers, conversation IDs, upstream status, retrieval details, and browser-reported playback results. Credentials remain redacted.
-- Small libraries are sent in full within a 24,000-character budget; larger libraries use synonym-expanded retrieval and a no-match fallback. Legacy content is inactive until explicitly imported through Knowledge Management.
+- Small libraries are sent in full within a 24,000-character budget; larger libraries use the configured model to rewrite the query before retrieving original evidence, with a natural no-match fallback. Legacy content is inactive until explicitly imported through Knowledge Management.
 - Hosting uses instance IDs and sequence ordering. Disconnects pause old playback; reconnection never replays it. Failed, muted, cancelled, and completed audio have distinct outcomes.
 - The model API key is stored only in a server-side configuration file ignored by Git. Neither the API nor the UI returns the plaintext key.
 - No real model configuration is included. Users must enter their own settings in the workbench after the first launch.

@@ -106,7 +106,13 @@ The model area supports:
 - Editing answer style, insufficient-knowledge copy, service-error copy, and the role/fact boundary independently.
 - Testing the model connection explicitly.
 
-Small libraries are provided in full within a 24,000-character budget. Larger libraries use synonym-expanded lexical retrieval, selecting up to 12 chunks with a bounded no-match fallback. This demo strategy does not guarantee semantic recall for arbitrary large-library queries. Filenames are not presented as visitor source attribution.
+Small libraries are provided in full within a 24,000-character budget, using one model call. Larger libraries first ask the same configured model for query paraphrases and keywords, then rank original evidence and select up to 12 chunks. Rewrites are never evidence or spoken answers. In grounded mode, no matches produce the configured knowledge fallback instead of passing arbitrary first-N chunks.
+
+Large libraries add at most one short model request per turn (up to 400 output tokens and 5 seconds, or the shorter configured timeout), increasing cost and latency without requiring another key or service. If rewriting fails but the original query still matches evidence, answering continues with that context; otherwise the natural service fallback is returned. `question.retrieval`, `modelStage`, `rewriteStatus`, and dedicated rewrite error fields distinguish the two stages. This improves paraphrase recall but does not guarantee every large-library query; real-model quality still requires acceptance testing. Filenames are not shown as visitor sources.
+
+PDF import reads actual page text only. Blank/image-only PDFs request OCR instead of importing generated page numbers. Mixed PDFs import text-bearing pages; image content is not automatically recognized.
+
+Hosting stop is independent of pending broadcasts. Control/draft-save requests time out after 10 seconds with an unconfirmed-outcome notice and recoverable controls. Edits made during saving remain unsaved drafts. A lost save response is confirmed only when server scripts equal that submission, without overwriting another administrator's changes. The workbench includes `expectedInstanceId` and `expectedSequence` in `POST /api/live-control/present` and `/mode`; stale commands after stop, mode changes, or restart return `409 LIVE_CONTROL_STALE_COMMAND` without replay. Legacy single-field requests remain compatible; external controllers should also send these guards and refresh state on 409.
 
 ### Bundled Future Teacher Project Knowledge
 
@@ -155,6 +161,8 @@ http://127.0.0.1:8080/avatar?preview=1
 The preview retains four test buttons and adds player status / failure diagnostics. See `public/avatar-media/README.en.md` for motion mapping and rebuild instructions. Configure the name, posters, and media in `public/avatar-config.json`; manage scripts in the workbench. Legacy sample quick questions are disabled. The frontend caches the configured service fallback and attempts speech on network or invalid-response errors; audible output still depends on browser support and sound settings.
 
 Hosting synchronization includes instance IDs, monotonic sequence numbers, and the active command sequence. Old snapshots cannot overwrite newer commands. Disconnects pause playback; reconnecting reconciles missed stops without replaying old scripts. Health polling cannot advance the SSE command sequence. Failed, cancelled, and muted speech are never labelled completed.
+
+Frontend answer headers and body share a 140-second final deadline covering the maximum model budget. Ordinary network errors fall back immediately; silent hangs fall back at the deadline and restore sending. Cancellation/hosting takeover is not a timeout, and late answers cannot restart speech. Timeout logs use `CLIENT_REQUEST_TIMEOUT`; no new configuration is required.
 
 ## API Contract
 
@@ -274,6 +282,10 @@ npm test
 ```
 
 Tests cover administration sessions, full dialogue logs/redaction, upstream 401/429/500 classification, synonym retrieval, explicit legacy migration/deletion, hosting reconnect and stale snapshots, distinct speech outcomes, offline fallbacks, file persistence, model settings, and media ranges. Run `npm test` for current counts. `test/avatar-runtime.test.js` executes actual frontend source in isolation to exercise runtime failure paths.
+
+Use `npm run test:review` as the strict review gate: known-finding assertions run as ordinary failures instead of TODOs. TODOs in `npm test` are not passes. See the [expanded test and review report](TEST_REVIEW_20260912.en.md) and [testing guide](TESTING.md).
+
+The five findings were fixed on 2026-09-13 with their regressions retained: 174/174 pass, zero TODOs. See the [fix and verification report](FIX_REVIEW_20260913.en.md).
 
 ## Docker
 
