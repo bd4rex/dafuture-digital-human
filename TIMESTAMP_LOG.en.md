@@ -238,3 +238,37 @@
 - Release preparation: at the user's request, publish the separate Chinese/English external-model integration guides, documentation indexes, and this log to `main` at `https://github.com/bd4rex/dafuture-digital-human`. Local and remote both started at `8741f25` without divergence; no separate feature-branch merge is required.
 - Checks: validated 75 local links across 8 Markdown files, 6 JSON examples, and 15 corresponding sections per guide. All 69 existing automated tests passed again, as did patch-format checks.
 - Boundary: documentation only, with no application-version, runtime-code, configuration, knowledge, hosting-script, or deployment changes. The external-speech interfaces remain explicitly proposed rather than implemented. Runtime credentials and data are excluded.
+
+## 2026-09-12 23:18 +0800
+
+- Task: fix all six confirmed issue categories, add regression coverage, perform independent cross-review, and repeat real-browser acceptance.
+- Fixes: independent hosting stop and stale-command guards; concurrent editing and lost-save-response recovery; uniform speakable-model-text validation; serialized model/script writes; actual-PDF-text validation; same-model query rewriting for large libraries with evidence-based degradation.
+- Additional regressions cover rewrite health recovery/deleted knowledge/hosting takeover, bracketed-text frontend/backend compatibility, stale polls and same-sequence script snapshots, and configured output-token limits.
+- Verification: all 123 automated tests pass (54 additions over the original 69); production dependency audit reports zero known vulnerabilities; patch-format checks pass. Playwright verifies stopping delayed broadcasts, retaining edits, recovering lost save confirmations, large-library paraphrases, natural malformed-response fallback, and a 390px viewport.
+- Usage change: large libraries add at most one short model request, capped at min(400, configured output tokens) and min(5 seconds, configured timeout); small libraries add no call. Rewrites are not factual evidence, and arbitrary-query recall is not guaranteed.
+- Boundary: isolated data with mock models/speech events only. Existing runtime data and keys remain unchanged. No real paid requests, GitHub commit/push, or deployment. Real-model quality and physical-device WeChat acceptance remain pending.
+
+## 2026-09-12 23:39 +0800
+
+- Task: expand tests and independently review the current working tree; no business implementation changed this round.
+- Coverage: 42 additions for two-hop real HTTP model transport, real multipart knowledge lifecycle/PDF uploads, model boundaries/full logs, workbench button events, and visitor SSE/speech/event retries. A unified fake clock and positive control strengthen the test harness.
+- Result: 165 tests, 160 pass, 5 confirmed findings retained as executing, failing TODO assertions. New `npm run test:review` removes their TODO designation and correctly returns 5 failures with exit 1. Default exit 0 is not an all-pass result.
+- Findings: no frontend deadline/fallback on hanging responses; valid prose about insufficient materials misclassified as refusal; typed reasoning segments and tool-call progress potentially spoken; HTTP body disconnects misclassified as malformed model output. Provider segment/tool cases use simulated contracts only.
+- Documentation: added bilingual `answer-mvp/TEST_REVIEW_20260912` reports and updated testing/runtime guides. Dependency audit reports zero known vulnerabilities; patch-format checks pass.
+- Boundary: isolated data, services, and placeholder credentials only. No real model/billable API, runtime-data changes, commit/push, or deployment. Browser layout, physical-device audio, capacity/soak, and Docker acceptance were not repeated this round.
+
+## 2026-09-13 00:05 +0800
+
+- Task: fix the five confirmed findings, retain their regressions, repeat tests, and independently cross-review.
+- Fixes: one 140-second frontend header/body deadline with distinct cancellation/timeout and ignored late results; preserve valid business prose mentioning insufficient materials; extract only explicit text segments; naturally reject tool/continuation intermediate results; distinguish HTTP body disconnects from JSON/compression errors.
+- Tests: ordinary and strict suites pass 174/174 with no failures/skips/TODOs, adding nine tests. REVIEW IDs remain, with all TODO designations removed. Native HTTP covers bad gzip, disconnects, timeouts, and tool completion; frontend coverage includes valid long requests, cancellation, recovery, and late responses.
+- Browser: restarted final code and verified business text, excluded reasoning, tool fallback, header/body hangs, and next-question recovery. Both frontend timeout paths retain full dialogue and CLIENT_REQUEST_TIMEOUT. Browser deadlines were accelerated from 140 seconds to 700 milliseconds; the real budget boundaries use the unified fake clock. Speech events were simulated.
+- Review: independent transport/completion and frontend cancellation/cleanup checks found no blocking issue in scope. Dependency audit reports zero known vulnerabilities; syntax and patch-format checks pass. Added bilingual `answer-mvp/FIX_REVIEW_20260913` reports; the original review remains a historical archive.
+- Boundary: no new configuration UI or origin restrictions, real paid providers, runtime-data/key changes, commit/push, or deployment. Isolated browser/service sessions are closed. Physical audio, WeChat devices, and capacity soak remain unverified.
+
+## 2026-09-13 00:25 +0800
+
+- Task: publish the accumulated reliability fixes, regression tests, and bilingual documentation to GitHub and merge main with explicit user authorization.
+- Preparation: confirmed local main matches freshly fetched origin/main and there is no open PR. Submit an isolated fix branch and merge through a PR without rewriting remote history.
+- Gates: strict review rerun passes 174/174 with no failures/skips/TODOs; dependency audit reports zero known vulnerabilities; patch-format checks pass.
+- Scope: code, tests, and documentation only. Runtime model configuration, admin credentials, hosting scripts, knowledge indexes/originals, and operations logs are excluded from this publication. Real-provider, deployment, and physical-device acceptance status is unchanged; the GitHub PR and remote main commit are the source of truth for merge completion.

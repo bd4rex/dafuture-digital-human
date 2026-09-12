@@ -8,6 +8,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
+    "test:review": "node scripts/run-review-tests.js",
     "test:functional": "node --test test/answer-functional.test.js",
     "test:capacity": "node scripts/run-capacity.js"
   },

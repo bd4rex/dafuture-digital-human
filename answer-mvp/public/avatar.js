@@ -44,6 +44,11 @@ const DEFAULT_CONFIG = Object.freeze({
 const DEFAULT_COMPOSER_HINT =
   '输入文字或点击麦克风提问 · AI 回答仅供参考';
 
+// Final transport deadline: maximum model budget (120 s), query rewrite (5 s)
+// and 15 s for transport. Keep it independent of cached configuration so a
+// newly increased server timeout cannot make a valid request expire early.
+const ANSWER_REQUEST_TIMEOUT_MS = 140_000;
+
 const elements = {
   servicePill: document.querySelector('#service-pill'),
   serviceLabel: document.querySelector('#service-label'),
@@ -973,33 +978,77 @@ function speakText(text, speechSequence, context) {
 }
 
 async function requestAnswer(question, signal, turnId) {
-  const response = await fetch('/answer', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Conversation-Id': turnId,
-    },
-    body: JSON.stringify({ question }),
-    signal,
-  });
+  const controller = new AbortController();
+  let rejectInterruption;
+  let interruptionError = null;
+  const interruption = new Promise((_resolve, reject) => { rejectInterruption = reject; });
+  const interrupt = (error) => {
+    if (interruptionError) return;
+    interruptionError = error;
+    controller.abort(error);
+    rejectInterruption(error);
+  };
+  const cancel = () => {
+    const error = new Error('问答请求已取消。');
+    error.name = 'AbortError';
+    interrupt(error);
+  };
+  const timer = setTimeout(() => {
+    const error = new Error('问答请求等待超时。');
+    error.name = 'TimeoutError';
+    error.code = 'CLIENT_REQUEST_TIMEOUT';
+    interrupt(error);
+  }, ANSWER_REQUEST_TIMEOUT_MS);
+  signal.addEventListener('abort', cancel, { once: true });
+  if (signal.aborted) cancel();
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.message || `请求失败（${response.status}）`);
-    error.code = payload.error;
-    error.fallbackText = typeof payload.answer === 'string'
-      ? payload.answer.trim()
-      : '';
-    error.speechText = typeof payload.speechText === 'string'
-      ? payload.speechText.trim()
-      : error.fallbackText;
-    throw error;
+  const receiveAnswer = async () => {
+    if (controller.signal.aborted) throw interruptionError;
+    const response = await fetch('/answer', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Conversation-Id': turnId,
+      },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) throw interruptionError;
+    const payload = await response.json().catch(() => {
+      if (controller.signal.aborted) throw interruptionError;
+      return {};
+    });
+    if (controller.signal.aborted) throw interruptionError;
+    if (!response.ok) {
+      const error = new Error(payload.message || `请求失败（${response.status}）`);
+      error.code = payload.error;
+      error.fallbackText = typeof payload.answer === 'string'
+        ? payload.answer.trim()
+        : '';
+      error.speechText = typeof payload.speechText === 'string'
+        ? payload.speechText.trim()
+        : error.fallbackText;
+      throw error;
+    }
+    // The server validates speakable text. Preserve ordinary bracketed labels,
+    // while rejecting serialized/truncated arrays rather than treating every [ as JSON.
+    const answer = typeof payload.answer === 'string' ? payload.answer.trim() : '';
+    const invalidBracketPrefix = /^\[/.test(answer) &&
+      !/^\[(?:\d+|[\p{L} ]+)\]\s*\S/u.test(answer);
+    if (!answer || /^[`{]/.test(answer) || invalidBracketPrefix) {
+      throw new Error('INVALID_ANSWER_RESPONSE');
+    }
+    return payload;
+  };
+  try {
+    // Race the entire response, including body parsing. A late transport that
+    // ignores abort must neither retain the UI wait nor revive an old answer.
+    return await Promise.race([receiveAnswer(), interruption]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', cancel);
   }
-  if (typeof payload.answer !== 'string' || !payload.answer.trim() || /^[\s`{\[]/.test(payload.answer)) {
-    throw new Error('INVALID_ANSWER_RESPONSE');
-  }
-  return payload;
 }
 
 async function askQuestion(question) {

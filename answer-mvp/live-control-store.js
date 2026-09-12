@@ -132,7 +132,7 @@ function revisionFor(scripts) {
 
 async function atomicWrite(filePath, value) {
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporaryPath, value, {
       encoding: 'utf8',
@@ -251,16 +251,12 @@ export class LiveControlStore {
   }
 
   async saveScripts(rawScripts, expectedRevision) {
-    if (this.saveInFlight) {
-      await this.saveInFlight;
-    }
-    this.saveInFlight = this.performSaveScripts(
-      rawScripts,
-      expectedRevision,
-    ).finally(() => {
-      this.saveInFlight = null;
-    });
-    return this.saveInFlight;
+    const operation = (this.saveInFlight ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.performSaveScripts(rawScripts, expectedRevision));
+    this.saveInFlight = operation;
+    try { return await operation; }
+    finally { if (this.saveInFlight === operation) this.saveInFlight = null; }
   }
 
   async performSaveScripts(rawScripts, expectedRevision) {

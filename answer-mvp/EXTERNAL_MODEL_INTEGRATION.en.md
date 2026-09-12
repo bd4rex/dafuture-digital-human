@@ -27,7 +27,7 @@ The avatar uses prerecorded silent videos and posters, not real-time generated v
 | ASR | `SpeechRecognition` / `webkitSpeechRecognition` | Add recording upload and a server recognition adapter |
 | TTS | `SpeechSynthesisUtterance` | Add server synthesis and browser audio playback |
 | Hosting | Operator selects exact text; SSE delivers it for browser speech | Generate, preview, approve, and dispatch prepared audio |
-| Retrieval | Full small-library context within 24,000 characters; synonyms and lexical matching for larger libraries | Leave retrieval unchanged initially; no Embedding dependency |
+| Retrieval | Full small-library context within 24,000 characters; one same-model query rewrite before retrieving original evidence for larger libraries; natural no-evidence fallback | Preserve two-stage diagnostics and graceful degradation; no Embedding dependency; rewrites are not evidence |
 | Logs | Full Q&A bodies, turn IDs, model outcomes, and browser speech events | Add ASR/TTS stages, provider request IDs, and cache diagnostics |
 | Avatar | Four video states: `idle`, `thinking`, `speaking`, `presenting` | Preserve the current player and mobile/WeChat adaptations |
 

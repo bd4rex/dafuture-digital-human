@@ -8,8 +8,17 @@ const state = {
   hostRevision: null,
   selectedHostIndex: -1,
   hostDirty: false,
+  hostEditSequence: 0,
+  hostSaveSequence: 0,
+  hostUnconfirmedSave: null,
   hostSaving: false,
   liveBusy: false,
+  liveStopping: false,
+  liveUncertain: false,
+  liveLoading: false,
+  liveOperationSequence: 0,
+  liveRequestController: null,
+  retiredLiveInstances: new Set(),
   workbenchMode: 'dialogue',
   opsLogs: null,
   opsLoading: false,
@@ -122,17 +131,36 @@ async function requestJson(url, options = {}) {
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(url, {
-    method: options.method ?? 'GET',
-    headers,
-    body: hasBody
-      ? formDataBody
-        ? options.body
-        : JSON.stringify(options.body)
-      : undefined,
-  });
-
-  const raw = await response.text();
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(options.signal.reason);
+  if (options.signal?.aborted) forwardAbort();
+  else options.signal?.addEventListener('abort', forwardAbort, { once: true });
+  let timedOut = false;
+  const timer = options.timeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs) : null;
+  let response;
+  let raw;
+  try {
+    response = await fetch(url, {
+      method: options.method ?? 'GET', headers, signal: controller.signal,
+      body: hasBody
+        ? formDataBody ? options.body : JSON.stringify(options.body)
+        : undefined,
+    });
+    raw = await response.text();
+  } catch (error) {
+    if (timedOut) {
+      const timeoutError = new Error('请求超时，执行结果尚未确认。请刷新状态；需要停止时可再次点击停止。');
+      timeoutError.code = 'REQUEST_TIMEOUT';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', forwardAbort);
+  }
   let payload = {};
   if (raw) {
     try {
@@ -206,6 +234,7 @@ function updateHostSaveState(message = '') {
 }
 
 function markHostDirty() {
+  state.hostEditSequence += 1;
   state.hostDirty = true;
   updateHostSaveState('主持词有未保存更改。');
 }
@@ -311,8 +340,9 @@ function renderHostControl() {
     indicatorHint.textContent = '切换到主持模式后可确定性播报';
   }
 
-  elements.broadcastHostScript.disabled = !script || state.liveBusy;
-  elements.stopHostBroadcast.disabled = !hosting || state.liveBusy;
+  elements.broadcastHostScript.disabled = !script || state.liveBusy || state.hostSaving;
+  // A pending play/mode response must never lock out the independent stop path.
+  elements.stopHostBroadcast.disabled = state.liveStopping || (!hosting && !state.liveBusy && !state.liveUncertain);
   elements.returnDialogueMode.disabled = !hosting || state.liveBusy;
   for (const tab of elements.modeTabs) {
     tab.disabled = state.liveBusy;
@@ -320,11 +350,9 @@ function renderHostControl() {
   updateHostSaveState();
 }
 
-function applyLiveSnapshot(snapshot, { replaceScripts = true } = {}) {
-  if (state.liveControl?.instanceId === snapshot.instanceId && snapshot.sequence < state.liveControl.sequence) return;
+function applyHostScriptsSnapshot(snapshot, { replaceScripts = true, advanceRevision = replaceScripts } = {}) {
   const selectedId = currentHostScript()?.id;
-  state.liveControl = snapshot;
-  state.hostRevision = replaceScripts ? snapshot.revision : state.hostRevision;
+  if (advanceRevision) state.hostRevision = snapshot.revision;
   if (replaceScripts) {
     state.hostScripts = Array.isArray(snapshot.scripts)
       ? snapshot.scripts.map((script) => ({ ...script }))
@@ -337,10 +365,28 @@ function applyLiveSnapshot(snapshot, { replaceScripts = true } = {}) {
     }
     state.hostDirty = false;
   }
-  setWorkbenchPanel(snapshot.mode);
   renderHostList();
-  renderHostEditor();
+  if (replaceScripts) renderHostEditor();
   renderHostControl();
+}
+
+function sameHostScripts(left, right) {
+  const normalized = (scripts) => scripts.map(({ id, title, text }) => ({
+    id: id.trim(), title: title.trim(), text: text.trim(),
+  }));
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function applyLiveSnapshot(snapshot, { replaceScripts = true } = {}) {
+  if (state.retiredLiveInstances.has(snapshot.instanceId)) return false;
+  if (state.liveControl?.instanceId === snapshot.instanceId && snapshot.sequence < state.liveControl.sequence) return false;
+  if (state.liveControl && state.liveControl.instanceId !== snapshot.instanceId) {
+    state.retiredLiveInstances.add(state.liveControl.instanceId);
+  }
+  state.liveControl = snapshot;
+  setWorkbenchPanel(snapshot.mode);
+  applyHostScriptsSnapshot(snapshot, { replaceScripts });
+  return true;
 }
 
 function createUniqueHostId(base = `host-${Date.now().toString(36)}`) {
@@ -479,52 +525,111 @@ async function saveHostScripts() {
     return false;
   }
 
+  const editSequence = state.hostEditSequence;
+  const operationSequence = state.liveOperationSequence;
+  const scripts = state.hostScripts.map((script) => ({ ...script }));
+  state.hostSaveSequence += 1;
   state.hostSaving = true;
-  updateHostSaveState();
+  renderHostControl();
   try {
     const snapshot = await requestJson('/api/live-control', {
       method: 'PUT',
+      timeoutMs: 10_000,
       body: {
         revision: state.hostRevision,
-        scripts: state.hostScripts,
+        scripts,
       },
     });
-    applyLiveSnapshot(snapshot);
-    elements.hostControlMessage.textContent = '主持词已保存并立即生效。';
-    elements.hostControlMessage.classList.add('success');
-    showToast('主持词已持久化保存。');
-    return true;
+    if (state.retiredLiveInstances.has(snapshot.instanceId)) {
+      throw new Error('服务已重启，当前编辑已保留，请刷新主持状态后核对保存结果。');
+    }
+    const newerEdits = state.hostEditSequence !== editSequence;
+    state.hostUnconfirmedSave = null;
+    // Saving drafts and controlling playback have separate versions. A late
+    // save still advances the saved revision, but cannot undo a newer stop.
+    if (operationSequence === state.liveOperationSequence) applyLiveSnapshot(snapshot, { replaceScripts: false });
+    applyHostScriptsSnapshot(snapshot, { replaceScripts: !newerEdits, advanceRevision: true });
+    if (operationSequence === state.liveOperationSequence) {
+      elements.hostControlMessage.textContent = newerEdits
+        ? '本次提交已保存；新增编辑仍未保存，请再次保存后播报。'
+        : '主持词已持久化保存。';
+      elements.hostControlMessage.classList.toggle('success', !newerEdits);
+      showToast(newerEdits ? '新增编辑已保留，尚未保存或播报。' : '主持词已持久化保存。');
+    }
+    return !newerEdits;
   } catch (error) {
-    updateHostSaveState(
-      error.status === 409 ? '主持词版本有冲突，请刷新页面。' : error.message,
-    );
-    showToast(error.message, 'error');
+    if (error.code === 'REQUEST_TIMEOUT' || error.status === undefined) {
+      // A lost response does not tell us whether the write committed. A later
+      // read may confirm this exact submission, never silently rebase a draft
+      // onto a different administrator's changes.
+      state.hostUnconfirmedSave = { scripts, editSequence };
+    }
+    if (operationSequence === state.liveOperationSequence) {
+      updateHostSaveState(
+        error.status === 409 ? '主持词版本有冲突，当前编辑已保留，请核对其他管理页面的修改。' : error.message,
+      );
+      showToast(error.message, 'error');
+    }
     return false;
   } finally {
     state.hostSaving = false;
-    updateHostSaveState();
+    renderHostControl();
   }
 }
 
 async function loadLiveControl({ silent = false } = {}) {
-  if (state.liveBusy || state.hostSaving) return false;
+  if (state.liveBusy || state.hostSaving || state.liveLoading) return false;
+  const operationSequence = state.liveOperationSequence;
+  const saveSequence = state.hostSaveSequence;
+  state.liveLoading = true;
   try {
-    const snapshot = await requestJson('/api/live-control');
-    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
-    return true;
+    const snapshot = await requestJson('/api/live-control', { timeoutMs: 10_000 });
+    if (operationSequence !== state.liveOperationSequence || saveSequence !== state.hostSaveSequence) return false;
+    const unconfirmed = state.hostUnconfirmedSave;
+    const confirmsSave = unconfirmed && sameHostScripts(snapshot.scripts, unconfirmed.scripts);
+    const accepted = applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    if (accepted && confirmsSave) {
+      const newerEdits = state.hostEditSequence !== unconfirmed.editSequence;
+      applyHostScriptsSnapshot(snapshot, { replaceScripts: !newerEdits, advanceRevision: true });
+      state.hostUnconfirmedSave = null;
+      elements.hostControlMessage.textContent = newerEdits
+        ? '已核对确认上次保存成功；新增编辑仍未保存，请再次保存后播报。'
+        : '已核对确认上次保存成功。';
+      elements.hostControlMessage.classList.toggle('success', !newerEdits);
+    }
+    if (accepted) state.liveUncertain = false;
+    renderHostControl();
+    return accepted;
   } catch (error) {
     if (!silent && error.status !== 401) {
       showToast(error.message, 'error');
     }
     return false;
+  } finally {
+    state.liveLoading = false;
   }
+}
+
+function beginLiveOperation({ stopping = false } = {}) {
+  state.liveOperationSequence += 1;
+  state.liveRequestController?.abort();
+  state.liveRequestController = new AbortController();
+  state.liveBusy = true;
+  state.liveStopping = stopping;
+  renderHostControl();
+  return { sequence: state.liveOperationSequence, signal: state.liveRequestController.signal };
+}
+
+function finishLiveOperation(operation) {
+  if (operation.sequence !== state.liveOperationSequence) return;
+  state.liveBusy = false;
+  state.liveStopping = false;
+  state.liveRequestController = null;
+  renderHostControl();
 }
 
 async function switchWorkbenchMode(mode) {
   if (state.liveBusy || !['dialogue', 'hosting'].includes(mode)) {
-    return;
-  }
-  if (mode === 'dialogue' && state.hostDirty && !(await saveHostScripts())) {
     return;
   }
   if (state.liveControl?.mode === mode) {
@@ -533,84 +638,115 @@ async function switchWorkbenchMode(mode) {
     return;
   }
 
-  state.liveBusy = true;
-  renderHostControl();
-  elements.hostControlMessage.textContent =
-    mode === 'hosting' ? '正在切换到主持模式…' : '正在恢复对话模式…';
-  elements.hostControlMessage.classList.remove('success');
+  const operation = beginLiveOperation();
   try {
+    if (mode === 'dialogue' && state.hostDirty && !(await saveHostScripts())) return;
+    if (operation.sequence !== state.liveOperationSequence) return;
+    elements.hostControlMessage.textContent =
+      mode === 'hosting' ? '正在切换到主持模式…' : '正在恢复对话模式…';
+    elements.hostControlMessage.classList.remove('success');
+    state.liveUncertain = true;
     const snapshot = await requestJson('/api/live-control/mode', {
       method: 'POST',
-      body: { mode },
+      body: {
+        mode,
+        ...(state.liveControl ? {
+          expectedInstanceId: state.liveControl.instanceId,
+          expectedSequence: state.liveControl.sequence,
+        } : {}),
+      },
+      signal: operation.signal, timeoutMs: 10_000,
     });
-    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    if (operation.sequence !== state.liveOperationSequence) return;
+    state.liveUncertain = false;
+    applyLiveSnapshot(snapshot, { replaceScripts: false });
     elements.hostControlMessage.textContent =
       mode === 'hosting'
         ? '主持模式已开启，前台问答已暂停。'
         : '已恢复对话模式，前台可以继续提问。';
     elements.hostControlMessage.classList.add('success');
   } catch (error) {
-    showToast(error.message, 'error');
+    if (operation.sequence === state.liveOperationSequence) {
+      const message = error.status === 409 ? '现场控制状态已变化，本次未切换。请刷新状态后重试。' : error.message;
+      elements.hostControlMessage.textContent = message;
+      showToast(message, 'error');
+    }
   } finally {
-    state.liveBusy = false;
-    renderHostControl();
+    finishLiveOperation(operation);
   }
 }
 
 async function broadcastSelectedHostScript() {
   const scriptId = currentHostScript()?.id;
-  if (!scriptId || state.liveBusy) {
+  if (!scriptId || state.liveBusy || state.hostSaving) {
     return;
   }
-  if (!(await saveHostScripts())) {
-    return;
-  }
-
-  state.liveBusy = true;
-  renderHostControl();
-  elements.hostControlMessage.textContent = '正在向已连接前台发送播报指令…';
-  elements.hostControlMessage.classList.remove('success');
+  const operation = beginLiveOperation();
   try {
+    if (!(await saveHostScripts()) || operation.sequence !== state.liveOperationSequence) return;
+    elements.hostControlMessage.textContent = '正在向已连接前台发送播报指令…';
+    elements.hostControlMessage.classList.remove('success');
+    state.liveUncertain = true;
+    const dispatchedRevision = state.hostRevision;
     const snapshot = await requestJson('/api/live-control/present', {
       method: 'POST',
-      body: { scriptId },
+      body: {
+        scriptId,
+        expectedInstanceId: state.liveControl.instanceId,
+        expectedSequence: state.liveControl.sequence,
+      },
+      signal: operation.signal, timeoutMs: 10_000,
     });
-    applyLiveSnapshot(snapshot);
+    if (operation.sequence !== state.liveOperationSequence) return;
+    state.liveUncertain = false;
+    // Playback responses may contain an older script revision than a save that
+    // completed meanwhile. Only save/load responses replace editor contents.
+    applyLiveSnapshot(snapshot, { replaceScripts: false });
     const connected = snapshot.connectedClients ?? 0;
+    const laterChanges = state.hostDirty || state.hostRevision !== dispatchedRevision;
     elements.hostControlMessage.textContent =
       connected > 0
-        ? `已发送到 ${connected} 个前台；新指令会中断上一段播报。`
+        ? `已发送已保存的主持词到 ${connected} 个前台；新指令会中断上一段播报。${laterChanges ? '之后的编辑或保存不包含在本次播报中。' : ''}`
         : '指令已下发，但当前没有已连接的前台。';
     elements.hostControlMessage.classList.add('success');
     showToast(connected > 0 ? '主持词已发送到前台。' : '已下发，当前无前台连接。');
   } catch (error) {
-    elements.hostControlMessage.textContent = error.message;
-    showToast(error.message, 'error');
+    if (operation.sequence === state.liveOperationSequence) {
+      const message = error.status === 409 ? '现场控制状态已变化，本次未播报。请刷新状态后重新选择播报。' : error.message;
+      elements.hostControlMessage.textContent = message;
+      showToast(message, 'error');
+    }
   } finally {
-    state.liveBusy = false;
-    renderHostControl();
+    finishLiveOperation(operation);
   }
 }
 
 async function stopHostBroadcast() {
-  if (state.liveBusy || state.liveControl?.mode !== 'hosting') {
+  if (state.liveStopping || (!state.liveBusy && !state.liveUncertain && state.liveControl?.mode !== 'hosting')) {
     return;
   }
-  state.liveBusy = true;
-  renderHostControl();
+  const operation = beginLiveOperation({ stopping: true });
+  elements.hostControlMessage.textContent = '正在发送停止指令…';
+  elements.hostControlMessage.classList.remove('success');
+  state.liveUncertain = true;
   try {
     const snapshot = await requestJson('/api/live-control/stop', {
       method: 'POST',
       body: {},
+      signal: operation.signal, timeoutMs: 10_000,
     });
-    applyLiveSnapshot(snapshot, { replaceScripts: !state.hostDirty });
+    if (operation.sequence !== state.liveOperationSequence) return;
+    state.liveUncertain = false;
+    applyLiveSnapshot(snapshot, { replaceScripts: false });
     elements.hostControlMessage.textContent = '已通知所有前台停止当前播报。';
     elements.hostControlMessage.classList.add('success');
   } catch (error) {
-    showToast(error.message, 'error');
+    if (operation.sequence === state.liveOperationSequence) {
+      elements.hostControlMessage.textContent = `停止尚未确认：${error.message}`;
+      showToast(elements.hostControlMessage.textContent, 'error');
+    }
   } finally {
-    state.liveBusy = false;
-    renderHostControl();
+    finishLiveOperation(operation);
   }
 }
 

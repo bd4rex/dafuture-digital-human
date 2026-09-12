@@ -131,9 +131,9 @@ async function extractText(buffer, filename, extension) {
     }
 
     const parser = new PDFParse({ data: buffer });
+    let result;
     try {
-      const result = await parser.getText();
-      return result.text;
+      result = await parser.getText();
     } catch {
       throw knowledgeError(
         'KNOWLEDGE_INVALID_PDF',
@@ -142,6 +142,17 @@ async function extractText(buffer, filename, extension) {
     } finally {
       await parser.destroy().catch(() => {});
     }
+
+    // The combined result includes synthetic page counters, even for blank or
+    // image-only PDFs. Only actual page text can become searchable knowledge.
+    const text = result.pages.map((page) => page.text).join('\n\n');
+    if (!normalizeExtractedText(text)) {
+      throw knowledgeError(
+        'KNOWLEDGE_NO_TEXT',
+        `文件“${filename}”中没有可用的文字层；扫描件或图片 PDF 请先进行 OCR 后再导入。`,
+      );
+    }
+    return text;
   }
 
   throw knowledgeError(
