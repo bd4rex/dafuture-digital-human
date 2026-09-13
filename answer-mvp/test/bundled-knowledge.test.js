@@ -12,9 +12,12 @@ const bundleDirectory = fileURLToPath(new URL('../bundled-knowledge/future-teach
 const manifest = JSON.parse(await readFile(path.join(bundleDirectory, 'manifest.json'), 'utf8'));
 const logger = { info() {}, warn() {} };
 
-async function temporaryDirectory(t) {
+async function temporaryDirectory(t, beforeRemove = () => {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'future-teacher-seed-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.after(async () => {
+    try { await beforeRemove(); }
+    finally { await rm(directory, { recursive: true, force: true }); }
+  });
   return directory;
 }
 
@@ -139,7 +142,8 @@ test('7 份资料的 50 道事实题和 8 道边界题均将必要证据送入�
 });
 
 test('默认应用通过真实 HTTP 使用预置知识生成可播报响应，空挂载无须手工上传', async (t) => {
-  const directory = await temporaryDirectory(t);
+  let app;
+  const directory = await temporaryDirectory(t, () => app?.close());
   const calls = [];
   const options = {
     contentPath: path.join(directory, 'content.json'),
@@ -173,8 +177,7 @@ test('默认应用通过真实 HTTP 使用预置知识生成可播报响应，�
   await writeFile(options.modelConfigPath, JSON.stringify({
     baseUrl: 'http://model.invalid/v1', apiKey: 'isolated-test-key', model: 'test-model',
   }));
-  const app = await buildApp(options);
-  t.after(() => app.close());
+  app = await buildApp(options);
   await app.listen({ host: '127.0.0.1', port: 0 });
   const response = await fetch(`http://127.0.0.1:${app.server.address().port}/answer`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -191,12 +194,12 @@ test('默认应用通过真实 HTTP 使用预置知识生成可播报响应，�
 });
 
 test('可显式停用预置知识，保持通用部署的空库启动方式', async (t) => {
-  const directory = await temporaryDirectory(t);
-  const app = await buildApp({
+  let app;
+  const directory = await temporaryDirectory(t, () => app?.close());
+  app = await buildApp({
     contentPath: path.join(directory, 'content.json'),
     bundledKnowledgeEnabled: false, logger: false,
   });
-  t.after(() => app.close());
   assert.equal(app.knowledgeStore.documents.length, 0);
   assert.equal(app.knowledgeStore.appliedBundles.length, 0);
 });

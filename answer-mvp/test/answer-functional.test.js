@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -27,11 +27,21 @@ const TEST_MODEL_CONFIG = {
   systemPrompt: '你是功能测试数字人。',
 };
 
+function registerAppCleanup(t, directory, getApp) {
+  t.after(async () => {
+    // onResponse/service.stop may still append logs after the HTTP body was
+    // received. Stop and drain the application before removing its data root.
+    try { await getApp()?.close(); }
+    finally { await rm(directory, { recursive: true, force: true }); }
+  });
+}
+
 test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播报答案', async (t) => {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), 'answer-functional-'),
   );
-  t.after(() => rm(temporaryDirectory, { recursive: true, force: true }));
+  let app;
+  registerAppCleanup(t, temporaryDirectory, () => app);
 
   const contentPath = path.join(temporaryDirectory, 'content.json');
   const modelConfigPath = path.join(temporaryDirectory, 'model-config.json');
@@ -41,7 +51,7 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
   ]);
 
   const modelCalls = [];
-  const app = await buildApp({
+  app = await buildApp({
     contentPath,
     modelConfigPath,
     knowledgePath: path.join(temporaryDirectory, 'knowledge.json'),
@@ -75,7 +85,6 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
       );
     },
   });
-  t.after(() => app.close());
   await app.knowledgeStore.importFiles([{
     filename: '培训资料.txt', buffer: Buffer.from('培训地点为测试教室。'),
   }], 'append');
@@ -113,4 +122,58 @@ test('TC-FUNC-001：问题经真实 HTTP 入口和模型上下文后返回可播
     modelCalls[0].body.messages[1].content,
     /培训地点为测试教室/,
   );
+});
+
+test('功能测试清理顺序：等待服务与日志关闭后再删除目录，避免 ENOTEMPTY 和残留监听', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'answer-cleanup-order-'));
+  let release;
+  let entered;
+  const closing = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const app = await buildApp({
+    contentPath: path.join(directory, 'content.json'),
+    modelConfigPath: path.join(directory, 'model.json'),
+    knowledgePath: path.join(directory, 'knowledge.json'),
+    knowledgeFilesDirectory: path.join(directory, 'files'),
+    adminAuthPath: path.join(directory, 'admin.json'),
+    liveControlPath: path.join(directory, 'live.json'),
+    opsLogPath: path.join(directory, 'operations.jsonl'),
+    bundledKnowledgeEnabled: false, adminApiKey: '', adminPassword: '', logger: false,
+    llmFetch: async () => { assert.fail('cleanup must not call a model'); },
+  });
+  const append = app.opsLogStore.appendEntry.bind(app.opsLogStore);
+  app.opsLogStore.appendEntry = async entry => {
+    if (entry.action === 'service.stop') { entered(); await gate; }
+    return append(entry);
+  };
+  const hooks = [];
+  registerAppCleanup({ after: hook => hooks.push(hook) }, directory, () => app);
+  let cleanup;
+  try {
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    cleanup = (async () => { for (const hook of hooks) await hook(); })();
+    await closing;
+    assert.equal((await stat(directory)).isDirectory(), true, 'pending service.stop still owns this directory');
+    release();
+    await cleanup;
+    assert.equal(app.server.listening, false);
+    await assert.rejects(stat(directory), { code: 'ENOENT' });
+  } finally {
+    release();
+    await cleanup;
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('功能测试清理顺序：关闭失败时仍清理目录，保留关闭错误', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'answer-cleanup-failure-'));
+  const hooks = [];
+  registerAppCleanup({ after: hook => hooks.push(hook) }, directory, () => ({
+    close: async () => { throw new Error('isolated close failure'); },
+  }));
+  try {
+    await assert.rejects((async () => { for (const hook of hooks) await hook(); })(), /isolated close failure/);
+    await assert.rejects(stat(directory), { code: 'ENOENT' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

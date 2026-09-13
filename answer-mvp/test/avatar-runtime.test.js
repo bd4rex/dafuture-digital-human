@@ -9,8 +9,9 @@ const source = (await readFile(new URL('../public/avatar.js', import.meta.url), 
   .replace(/^import .*;\n/gm, '').replace(/void start\(\);\s*$/, '');
 
 function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, eventFetch } = {}) {
-  const element = () => ({ textContent: '', hidden: false, disabled: false, dataset: {},
+  const element = () => ({ textContent: '', hidden: false, disabled: false, dataset: {}, listeners: {},
     classList: { add() {}, remove() {}, toggle() {} }, style: {},
+    addEventListener(name, handler) { this.listeners[name] = handler; },
     setAttribute() {}, querySelectorAll() { return []; }, append() {}, remove() { this.removed = true; }, scrollTo() {},
   });
   const events = [];
@@ -62,17 +63,19 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
   const browser = {
     EventSource: EventSourceMock, speechSynthesis: { cancel() { cancels++; }, speak() {}, getVoices: () => [] }, SpeechSynthesisUtterance: Utterance,
     setTimeout: scheduleTimer, clearTimeout: cancelTimer, performance: performanceClock,
-    Date: dateClock, AbortController, AbortSignal: signalApi,
+    Date: dateClock, AbortController, AbortSignal: signalApi, addEventListener() {}, innerHeight: 800,
   };
   const context = vm.createContext({
     AvatarFlow, AVATAR_STATES, LiveStateTracker, console, AbortController, AbortSignal: signalApi,
     SpeechSynthesisUtterance: Utterance,
     setTimeout: scheduleTimer,
     clearTimeout: cancelTimer,
+    setInterval() {},
     Date: dateClock,
     performance: performanceClock,
     sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key) ?? null; } },
-    document: { querySelector: element, querySelectorAll: () => [], createElement: element, body: { dataset: {} } },
+    document: { querySelector: element, querySelectorAll: () => [], createElement: element,
+      addEventListener() {}, documentElement: { style: { setProperty() {} } }, body: { dataset: {}, classList: { toggle() {} } } },
     window: browser, EventSource: EventSourceMock,
     fetch: async (url, options) => {
       fetchCalls.push({ url, options });
@@ -84,7 +87,7 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
       throw new Error('offline');
     },
   });
-  vm.runInContext(source + '\nglobalThis.api = {runtime,elements,handleLiveEvent,refreshHealth,speakText,askQuestion,stopSpeech,connectLiveEvents,loadLiveState,flushClientEvents,reportClientEvent};', context);
+  vm.runInContext(source + '\nglobalThis.api = {runtime,elements,handleLiveEvent,refreshHealth,speakText,askQuestion,stopSpeech,connectLiveEvents,loadLiveState,flushClientEvents,reportClientEvent,bindEvents};', context);
   const api = context.api;
   api.runtime.flow = new AvatarFlow();
   api.runtime.videoSwitcher = { show() {} };
@@ -310,6 +313,163 @@ test('实际 SSE 回调：控制断开立即停止，重连 sync 不重播，只
   assert.ok(app.events.some((event) => event.phase === 'speech-cancelled'));
 });
 
+test('实际 SSE 回调：等待响应头或正文时断流立即取消旧对话，正常 health 不能掩盖断线或恢复旧答案', async (t) => {
+  for (const phase of ['headers', 'body']) {
+    const live = store();
+    let release;
+    const late = new Promise((resolve) => { release = resolve; });
+    const app = fixture(t, async (url) => {
+      if (url === '/health') return { ok: true, json: async () => ({ ready: true, liveControl: live.publicLiveState() }) };
+      return phase === 'headers' ? late : { ok: true, json: () => late };
+    }, { manualTimers: true });
+    const messages = [];
+    app.elements.conversationLog.append = (message) => messages.push(message);
+    app.connectLiveEvents();
+    const connection = app.connections[0];
+    connection.emit('open');
+    connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+    const pending = app.askQuestion('主持人即将接管的旧问题。');
+    await new Promise(setImmediate);
+    const answerCall = app.fetchCalls.find((call) => call.url === '/answer');
+    connection.emit('error');
+    assert.equal(answerCall.options.signal.aborted, true, `${phase}: control loss aborts the answer transport`);
+    await pending;
+    assert.equal(app.runtime.requestController, null);
+    assert.equal(app.runtime.flow.state, 'idle');
+    assert.equal(messages[1].removed, true);
+    live.present('opening');
+    await app.refreshHealth();
+    assert.equal(app.runtime.liveMode, 'dialogue', 'health must not consume a missing hosting command');
+    assert.match(app.elements.serviceLabel.textContent, /实时控制.*重新连接|控制连接.*中断/);
+    assert.equal(app.elements.sendButton.disabled, true);
+    release(phase === 'headers' ? { ok: true, json: async () => ({ answer: '不能复活的旧答案。' }) } : { answer: '不能复活的旧答案。' });
+    await app.runTimers(180_000);
+    assert.equal(app.utterances.length, 0, 'neither stale text nor fallback may talk over an unobserved takeover');
+    assert.equal(app.events.filter((event) => event.phase === 'request-cancelled').length, 1);
+    assert.equal(app.events.some((event) => event.phase === 'request-failed'), false);
+    connection.emit('open');
+    connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+    assert.equal(app.runtime.liveMode, 'hosting');
+    assert.equal(app.utterances.length, 0, 'reconnect sync never replays the missed host script');
+    connection.emit('present', { data: JSON.stringify(live.present('opening')) });
+    assert.equal(app.utterances.at(-1).text, '欢迎来到现场。');
+  }
+});
+
+test('实际 SSE 回调：控制断流停止已开始的对话语音，重连和晚到语音回调不会恢复旧交互', async (t) => {
+  const live = store();
+  const app = fixture(t, async (url) => ({ ok: true, json: async () => url === '/health'
+    ? { ready: true, liveControl: live.publicLiveState() } : { answer: '正在播报的旧回答。' } }));
+  app.connectLiveEvents();
+  const connection = app.connections[0];
+  connection.emit('open');
+  connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+  await app.askQuestion('请介绍一下。');
+  const speech = app.utterances[0];
+  speech.handlers.start();
+  assert.equal(app.runtime.flow.state, 'speaking');
+  const previousCancels = app.cancels;
+  connection.emit('error');
+  assert.ok(app.cancels > previousCancels);
+  assert.equal(app.runtime.flow.state, 'idle');
+  assert.equal(app.runtime.activeSpeechSequence, null);
+  connection.emit('open');
+  connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+  speech.handlers.start();
+  speech.handlers.end();
+  assert.equal(app.runtime.flow.state, 'idle');
+  assert.equal(app.utterances.length, 1);
+  await new Promise(setImmediate);
+  assert.equal(app.events.filter((event) => event.phase === 'speech-cancelled').length, 1);
+  assert.equal(app.events.some((event) => event.phase === 'speech-completed'), false);
+});
+
+test('实际 SSE 回调：断线后明确暂停新问且保留草稿，仅有效 sync 恢复对话，不以 open 或 health 代替', async (t) => {
+  const live = store();
+  const oldSync = live.syncEvent();
+  live.switchMode('hosting');
+  live.switchMode('dialogue');
+  const app = fixture(t, async (url) => ({ ok: true, json: async () => url === '/health'
+    ? { ready: true, liveControl: live.publicLiveState() } : { answer: '重连后新问题的回答。' } }));
+  app.evaluate('runtime.voiceInput = new BrowserVoiceInput({ button: elements.voiceInputButton, input: elements.questionInput, form: elements.questionForm, hint: elements.composerHint });');
+  app.bindEvents();
+  app.connectLiveEvents();
+  const connection = app.connections[0];
+  connection.emit('open');
+  connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+  connection.emit('error');
+  app.elements.questionInput.value = '仍然保留的问题草稿';
+  app.elements.questionForm.listeners.submit({ preventDefault() {} });
+  assert.equal(app.elements.questionInput.value, '仍然保留的问题草稿');
+  app.runtime.voiceInput.handleEnd();
+  assert.match(app.elements.composerHint.textContent, /控制.*中断.*暂停|控制.*重连.*暂停/);
+  assert.equal(app.elements.questionInput.disabled, true);
+  await app.askQuestion('直接调用也不能绕过暂停。');
+  assert.equal(app.fetchCalls.some((call) => call.url === '/answer'), false);
+  connection.emit('open');
+  await app.refreshHealth();
+  connection.emit('sync', { data: '{broken' });
+  connection.emit('sync', { data: JSON.stringify({ ...live.syncEvent(), sequence: -1 }) });
+  connection.emit('sync', { data: JSON.stringify(oldSync) });
+  assert.equal(app.elements.sendButton.disabled, true);
+  connection.emit('sync', { data: JSON.stringify(live.syncEvent()) });
+  assert.equal(app.elements.questionInput.disabled, false);
+  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.questionInput.value, '仍然保留的问题草稿');
+  await app.askQuestion('现在提出新的问题。');
+  assert.equal(app.fetchCalls.filter((call) => call.url === '/answer').length, 1);
+  assert.equal(app.utterances[0].text, '重连后新问题的回答。');
+});
+
+test('实际 SSE 回调：初次连接尚未报错和不支持 SSE 的轮询兼容都保留离线自然兜底', async (t) => {
+  for (const unsupported of [false, true]) {
+    const app = fixture(t);
+    if (unsupported) delete app.browser.EventSource;
+    app.connectLiveEvents();
+    await app.askQuestion('网络暂时不可用时怎么办？');
+    assert.equal(app.utterances[0].text, app.runtime.config.serviceErrorText);
+    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.fetchCalls.filter((call) => call.url === '/answer').length, 1);
+  }
+});
+
+test('实际前台：后端确认在途问答被主持控制淘汰时按取消处理，既不显示旧正文也不播报空正文兜底', async (t) => {
+  for (const error of ['HOSTING_MODE_ACTIVE', 'ANSWER_CANCELLED']) {
+    let calls = 0;
+    const app = fixture(t, async () => ++calls === 1
+      ? { ok: false, status: 409, json: async () => ({ error, answerStatus: 'cancelled', answered: false,
+        cancellationReason: 'LIVE_CONTROL_CHANGED', answer: '', speechText: '' }) }
+      : { ok: true, json: async () => ({ answer: '之后新问答正常工作。' }) });
+    const messages = [];
+    app.elements.conversationLog.append = (message) => messages.push(message);
+    await app.askQuestion('已被主持接管的问题。');
+    await new Promise(setImmediate);
+    assert.equal(app.runtime.flow.state, 'idle');
+    assert.equal(app.runtime.requestController, null);
+    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.utterances.length, 0);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1].removed, true);
+    assert.equal(app.events.filter((event) => event.phase === 'request-cancelled').length, 1);
+    assert.equal(app.events.some((event) => event.phase === 'request-failed'), false);
+    assert.equal(app.runtime.liveTracker.sequence, -1, 'HTTP cancellation never consumes an SSE control sequence');
+    await app.askQuestion('现在是新的一轮。');
+    assert.equal(app.utterances.at(-1).text, '之后新问答正常工作。');
+  }
+});
+
+test('实际前台：原有主持模式拒绝新问提示与普通服务故障不误识别为主动取消', async (t) => {
+  for (const payload of [
+    { error: 'HOSTING_MODE_ACTIVE', answer: '当前处于主持模式，请稍后再提问。', speechText: '当前处于主持模式，请稍后再提问。' },
+    { error: 'MODEL_UNAVAILABLE', message: '模型暂时不可用' },
+  ]) {
+    const app = fixture(t, async () => ({ ok: false, status: 409, json: async () => payload }));
+    await app.askQuestion('当前能否提问？');
+    assert.equal(app.utterances[0].text, payload.answer || app.runtime.config.serviceErrorText);
+    assert.equal(app.events.some((event) => event.phase === 'request-cancelled'), false);
+  }
+});
+
 test('实际前台：未开始的浏览器语音超时报失败，晚到 start/end 不翻转为完成', async (t) => {
   const app = fixture(t, undefined, { manualTimers: true });
   const live = store();
@@ -352,6 +512,58 @@ test('实际前台：不支持语音与 speak 同步异常均如实上报，绝�
     await new Promise(setImmediate);
     assert.equal(app.events.some((event) => event.phase === 'speech-completed'), false);
     assert.ok(app.events.some((event) => event.errorCode === (failure === 'unsupported' ? 'SPEECH_UNSUPPORTED' : 'SPEECH_EXCEPTION')));
+  }
+});
+
+test('对话语音：不支持语音或同步抛错后保留失败提示，下一轮正常播报清除旧提示', async (t) => {
+  for (const failure of ['unsupported', 'exception']) {
+    const app = fixture(t, async () => ({ ok: true, json: async () => ({ answer: '活动门票免费。' }) }));
+    const speech = app.browser.speechSynthesis;
+    if (failure === 'unsupported') delete app.browser.speechSynthesis;
+    else speech.speak = () => { throw new Error('isolated speech failure'); };
+    await app.askQuestion('门票收费吗？');
+    assert.equal(app.elements.composerHint.textContent, '语音未能播放，请阅读屏幕上的回答。');
+    assert.equal(app.elements.sendButton.disabled, false);
+    // A harmless same-generation control sync is not a new user interaction.
+    app.handleLiveEvent({ data: JSON.stringify(store().syncEvent()) });
+    assert.equal(app.elements.composerHint.textContent, '语音未能播放，请阅读屏幕上的回答。');
+    await new Promise(setImmediate);
+    assert.ok(app.events.some(event => event.errorCode === (failure === 'unsupported' ? 'SPEECH_UNSUPPORTED' : 'SPEECH_EXCEPTION')));
+    assert.equal(app.events.some(event => event.phase === 'speech-completed'), false);
+
+    app.browser.speechSynthesis = speech;
+    speech.speak = () => {};
+    const next = app.askQuestion('可以介绍一下活动吗？');
+    assert.doesNotMatch(app.elements.composerHint.textContent, /语音未能播放/);
+    await next;
+    app.utterances.at(-1).handlers.start();
+    app.utterances.at(-1).handlers.end();
+    assert.doesNotMatch(app.elements.composerHint.textContent, /语音未能播放/);
+    await new Promise(setImmediate);
+    assert.equal(app.events.filter(event => event.phase === 'speech-completed').length, 1);
+  }
+});
+
+test('对话语音：失败提示不掩盖主持或控制断线，恢复同步后不复活旧错误', async (t) => {
+  for (const takeover of ['hosting', 'disconnect']) {
+    const app = fixture(t, async () => ({ ok: true, json: async () => ({ answer: '活动门票免费。' }) }));
+    delete app.browser.speechSynthesis;
+    await app.askQuestion('门票收费吗？');
+    assert.match(app.elements.composerHint.textContent, /语音未能播放/);
+    const live = store();
+    if (takeover === 'hosting') {
+      app.handleLiveEvent({ data: JSON.stringify(live.switchMode('hosting')) });
+      assert.match(app.elements.composerHint.textContent, /主持模式.*暂停/);
+      app.handleLiveEvent({ data: JSON.stringify(live.switchMode('dialogue')) });
+    } else {
+      app.connectLiveEvents();
+      app.connections[0].emit('error');
+      assert.match(app.elements.composerHint.textContent, /控制连接中断/);
+      app.handleLiveEvent({ data: JSON.stringify(live.syncEvent()) });
+    }
+    assert.equal(app.runtime.liveMode, 'dialogue');
+    assert.equal(app.elements.questionInput.disabled, false);
+    assert.doesNotMatch(app.elements.composerHint.textContent, /语音未能播放|主持模式.*暂停|控制连接中断/);
   }
 });
 
@@ -421,6 +633,64 @@ test('前台日志：并发触发 flush 不重复发送正在提交的同一事�
   await new Promise(setImmediate);
   assert.equal(app.runtime.eventQueue.length, 0);
   assert.equal(app.runtime.eventsSending, false);
+});
+
+test('前台日志：在途队首被容量淘汰后，成功或 400 回包只能移除原事件，不能丢下一条', async (t) => {
+  for (const status of [200, 400]) {
+    for (const count of [201, 205]) {
+      const releases = [];
+      let calls = 0;
+      const app = fixture(t, undefined, { eventFetch: () => {
+        calls += 1;
+        return calls <= 2 ? new Promise(resolve => releases.push(resolve)) : { ok: true };
+      } });
+      for (let index = 1; index <= count; index += 1) {
+        app.reportClientEvent({ kind: 'dialogue', turnId: `capacity-turn-${index}` }, 'request-started');
+      }
+      assert.equal(app.runtime.eventQueue.length, 200);
+      const retained = Array.from(app.runtime.eventQueue, event => event.eventId);
+      const persistedIds = () => JSON.parse(app.storage.get('digital-human-pending-events')).map(event => event.eventId);
+      assert.deepEqual(persistedIds(), retained);
+      const firstSent = app.events[0].eventId;
+      assert.ok(!retained.includes(firstSent));
+      releases[0]({ ok: status === 200, status });
+      await new Promise(setImmediate);
+      assert.equal(app.events[1].eventId, retained[0]);
+      assert.deepEqual(persistedIds(), retained, 'the new in-flight head remains durable until its own ACK');
+      assert.deepEqual(Array.from(app.runtime.eventQueue, event => event.eventId), retained);
+      releases[1]({ ok: true });
+      await new Promise(setImmediate);
+      assert.deepEqual(app.events.map(event => event.eventId), [firstSent, ...retained]);
+      assert.equal(app.runtime.eventQueue.length, 0);
+      assert.equal(app.storage.get('digital-human-pending-events'), '[]');
+      assert.equal(app.runtime.eventsSending, false);
+    }
+  }
+});
+
+test('前台日志：容量淘汰后收到临时失败或断网不移除保留事件，重试与持久化保持一致', async (t) => {
+  for (const failure of ['status', 'network']) {
+    let release;
+    let reject;
+    let calls = 0;
+    const app = fixture(t, undefined, { eventFetch: () => {
+      calls += 1;
+      return calls === 1 ? new Promise((resolve, fail) => { release = resolve; reject = fail; }) : { ok: true };
+    } });
+    for (let index = 1; index <= 201; index += 1) {
+      app.reportClientEvent({ kind: 'dialogue', turnId: `retry-capacity-turn-${index}` }, 'request-started');
+    }
+    const retained = Array.from(app.runtime.eventQueue, event => event.eventId);
+    if (failure === 'status') release({ ok: false, status: 503 });
+    else reject(new TypeError('isolated offline'));
+    await new Promise(setImmediate);
+    assert.equal(app.runtime.eventsSending, false);
+    assert.deepEqual(Array.from(app.runtime.eventQueue, event => event.eventId), retained);
+    assert.deepEqual(JSON.parse(app.storage.get('digital-human-pending-events')).map(event => event.eventId), retained);
+    await app.flushClientEvents();
+    assert.deepEqual(app.events.slice(1).map(event => event.eventId), retained);
+    assert.equal(app.storage.get('digital-human-pending-events'), '[]');
+  }
 });
 
 test('REVIEW-AVATAR-001：响应头或响应正文悬挂时，都应在有限等待后使用自然兜底', async (t) => {

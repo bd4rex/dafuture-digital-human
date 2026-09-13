@@ -272,3 +272,28 @@
 - Preparation: confirmed local main matches freshly fetched origin/main and there is no open PR. Submit an isolated fix branch and merge through a PR without rewriting remote history.
 - Gates: strict review rerun passes 174/174 with no failures/skips/TODOs; dependency audit reports zero known vulnerabilities; patch-format checks pass.
 - Scope: code, tests, and documentation only. Runtime model configuration, admin credentials, hosting scripts, knowledge indexes/originals, and operations logs are excluded from this publication. Real-provider, deployment, and physical-device acceptance status is unchanged; the GitHub PR and remote main commit are the source of truth for merge completion.
+
+## 2026-09-13 08:17 +0800
+
+- Task: fix the five concurrency/cancellation findings reproduced on main `35f013c`, and explain the coverage gaps behind additional review findings.
+- Fixes: pause obsolete dialogue on control loss, reject superseded model results by control generation, propagate visitor disconnection upstream, preserve new model-setting drafts, invalidate stale knowledge/health responses, and share in-flight event writes while allowing retries after failure.
+- Regressions: 33 additions; ordinary and strict suites both pass 207/207 with no failures/skips/TODOs. Coverage includes two-hop native HTTP body closure, cancellation logs/health/listener recovery, subsequent turns, and adjacent health-response orderings.
+- Browser: restarted final code verifies retained model edits and subsequent save, no deleted-file resurrection, no stale speech after injected control loss plus actual backend hosting takeover, retained draft, and resumed dialogue. Model/speech are simulated; control errors use test event injection. The recovery page has zero console errors/warnings.
+- Review/docs: cross-review leaves no confirmed finding unresolved in scope. Dependency audit reports zero known vulnerabilities; syntax/patch checks pass. Added bilingual second-round verification reports and updated the testing guide and external frontend cancellation contract.
+- Boundary: retain demo login/origin decisions; no real configuration/key/knowledge changes, paid model calls, GitHub commit/push, or deployment. Test browser and temporary service sessions are closed.
+
+## 2026-09-13 10:31 +0800
+
+- Task: fix four confirmed recovery findings and perform a bounded cross-review.
+- Fixes: bounded model/knowledge header/body waits with retained drafts and read-only reconciliation; byte-boundary rollback/tail recovery for partial log writes; acknowledgments matched to sent event IDs at queue capacity; speech-failure hints retained for the current interaction.
+- Rerun finding: after strict 225/225, the ordinary suite exposed an ENOTEMPTY teardown race and retained listener in TC-FUNC-001. Core HTTP/bundled-knowledge tests now close/drain the app before directory removal, with two deterministic cleanup regressions; failure was not hidden by rerunning.
+- Final verification: ordinary and strict suites both pass 227/227, zero failures/cancellations/skips/TODOs, 20 additions over 207. Dependency audit reports zero known vulnerabilities; syntax/patch/document-link checks pass. Independent checks also cover real OS EFBIG retry/query consistency, preserved archives, and 8 KB/UTF-8 boundaries.
+- Browser: actual server save with delayed reply preserves new model drafts/credential intent; native knowledge upload followed by hanging body consumption unlocks controls and retains files; simulated speech failure persists, clears on the next normal turn, and has distinct failed/completed logs. Browser deadlines are accelerated to 1.5 seconds; automated tests assert real budgets. Recovery page console: zero errors/warnings.
+- Closure: all confirmed findings in scope are fixed with no unresolved cross-review finding; bilingual third-round reports added. Demo login/origin choices and real runtime data are unchanged. No paid model calls, GitHub commit/push/main merge, or deployment. Isolated browser/service closed. Historical internal log corruption, power-loss/multiprocess writes, physical devices, and deployment remain outside acceptance claims.
+
+## 2026-09-13 10:37 +0800
+
+- Task: with new user authorization, publish the accumulated second/third-round fixes and tests to GitHub and merge main through a PR.
+- Preparation: fetched origin/main, confirmed it matches local `35f013c`, and found no open PR. Use the isolated `codex/recovery-regressions-20260913` branch without rewriting remote history.
+- Test synchronization: include three new standalone test files and enhanced frontend/workbench/functional/bundled-knowledge regressions, automatically discovered by both test entry points. The release adds 53 tests over the previously published 174; ordinary/strict pre-publication runs both pass 227/227, with zero failures/cancellations/skips/TODOs. Dependency audit reports zero known vulnerabilities.
+- Scope: code, tests, bilingual documentation, and timeline only; exclude real model keys, admin credentials, runtime knowledge/originals, hosting scripts, and logs. The testing guide now documents publication verification. Historical fix reports retain their original unpublished-state boundaries and do not imply deployment or real-provider acceptance. GitHub records remain authoritative for the actual PR merge and remote main result.

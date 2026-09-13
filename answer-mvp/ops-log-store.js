@@ -1,12 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
-  appendFile,
-  chmod,
   mkdir,
   open,
   readFile,
   rename,
-  stat,
   unlink,
 } from 'node:fs/promises';
 import path from 'node:path';
@@ -143,6 +140,54 @@ async function ignoreMissing(operation) {
   }
 }
 
+async function readBytes(handle, buffer, position) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, position + offset);
+    if (bytesRead === 0) throw new Error('无法读取完整的日志尾部，暂不继续写入');
+    offset += bytesRead;
+  }
+}
+
+async function recoverIncompleteTail(handle) {
+  const { size } = await handle.stat();
+  if (size === 0) return 0;
+  const lastByte = Buffer.alloc(1);
+  await readBytes(handle, lastByte, size - 1);
+  if (lastByte[0] === 0x0a) return size;
+
+  // Offsets are file bytes, never decoded string positions. Preserve every
+  // newline-terminated old record, including Chinese text and surrogate pairs.
+  const parts = [];
+  let boundary = 0;
+  for (let end = size; end > 0;) {
+    const start = Math.max(0, end - 8192);
+    const bytes = Buffer.allocUnsafe(end - start);
+    await readBytes(handle, bytes, start);
+    const newline = bytes.lastIndexOf(0x0a);
+    parts.push(bytes.subarray(newline + 1));
+    if (newline !== -1) {
+      boundary = start + newline + 1;
+      break;
+    }
+    end = start;
+  }
+
+  let completeEntry = false;
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts.reverse()));
+    const parsed = JSON.parse(text);
+    completeEntry = parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch { /* An interrupted JSON/UTF-8 suffix is not a complete log entry. */ }
+  if (completeEntry) {
+    // A crash may lose only the delimiter. Do not discard complete JSON.
+    await handle.writeFile('\n');
+    return size + 1;
+  }
+  await handle.truncate(boundary);
+  return boundary;
+}
+
 export class OpsLogStore {
   constructor({
     logPath,
@@ -181,9 +226,11 @@ export class OpsLogStore {
   }
 
   async ensureCurrentFile() {
-    const handle = await open(this.logPath, 'a', 0o600);
-    await handle.close();
-    await chmod(this.logPath, 0o600);
+    const handle = await open(this.logPath, 'a+', 0o600);
+    try {
+      await handle.chmod(0o600);
+      return await recoverIncompleteTail(handle);
+    } finally { await handle.close(); }
   }
 
   async record(rawEntry) {
@@ -214,18 +261,27 @@ export class OpsLogStore {
       throw new Error('运维日志条目超过安全大小上限');
     }
 
-    const currentSize = await stat(this.logPath)
-      .then((fileStat) => fileStat.size)
-      .catch((error) => {
-        if (error.code === 'ENOENT') {
-          return 0;
-        }
-        throw error;
-      });
+    // This runs inside writeQueue, before rotation as well as every append.
+    // A previous process exit or failed rollback cannot poison the next line.
+    const currentSize = await this.ensureCurrentFile();
     if (currentSize > 0 && currentSize + lineBytes > this.maxFileBytes) {
       await this.rotate();
     }
-    await appendFile(this.logPath, line, { encoding: 'utf8', mode: 0o600 });
+    const handle = await open(this.logPath, 'a', 0o600);
+    try {
+      const { size: previousSize } = await handle.stat();
+      try {
+        await handle.writeFile(line, { encoding: 'utf8' });
+      } catch (error) {
+        try { await handle.truncate(previousSize); }
+        catch (recoveryError) {
+          const failure = new AggregateError([error, recoveryError], '日志追加失败且无法恢复完整记录边界', { cause: error });
+          failure.code = 'OPS_LOG_RECOVERY_FAILED';
+          throw failure;
+        }
+        throw error;
+      }
+    } finally { await handle.close(); }
   }
 
   async rotate() {

@@ -271,6 +271,8 @@ synthesize({ text, voice, rate, format, signal, requestId });
 
 ### 取消必须覆盖整条链路
 
+当前 `/answer` 已实现请求断开与控制代次取消：在途旧轮返回 HTTP 409、`answerStatus: "cancelled"`、`cancellationReason: "LIVE_CONTROL_CHANGED"` 和空 `answer/speechText` 时，外部前台应丢弃该轮，不能将空正文重新包装成自然兜底播报。`error` 为 `HOSTING_MODE_ACTIVE` 或 `ANSWER_CANCELLED`。控制断线时暂停旧交互，有效同步后才恢复新提问；详见 [取消契约与复测](FIX_REVIEW_20260913_R2.md)。以下音频/ASR 资源清理要求仍适用于未来适配器，不表示外部语音模型已经接入。
+
 - 新问题、主持新指令、停止、切换模式、静音及控制断线，继续沿用现有取消语义。
 - 除了 `speechSynthesis.cancel()`，还要取消当前音频请求、停止 `<audio>`、清空待播放队列、释放 Blob URL；ASR 取消时停止麦克风轨道。
 - 以 `speechSequence`、`requestSequence` 和主持的 `instanceId + commandSequence` 丢弃晚到结果。即便供应商无法真正中止计算，旧结果也绝不能再次播放。

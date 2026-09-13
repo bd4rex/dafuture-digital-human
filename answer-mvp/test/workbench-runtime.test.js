@@ -8,7 +8,7 @@ const source = (await readFile(new URL('../public/app.js', import.meta.url), 'ut
 const flush = () => new Promise(setImmediate);
 
 function fixture({ ignoreAbort = false, mode = 'hosting' } = {}) {
-  const element = () => ({ textContent: '', value: '', hidden: false, disabled: false, dataset: {},
+  const element = () => ({ textContent: '', value: '', hidden: false, disabled: false, dataset: {}, files: [],
     listeners: {},
     classList: { add() {}, remove() {}, toggle() {} }, style: {},
     addEventListener(name, handler) { this.listeners[name] = handler; },
@@ -16,6 +16,7 @@ function fixture({ ignoreAbort = false, mode = 'hosting' } = {}) {
     setAttribute() {}, querySelectorAll() { return []; },
     querySelector() { return element(); }, closest() { return element(); },
     append() {}, replaceChildren() {}, focus() {}, select() {}, scrollIntoView() {},
+    reportValidity() { return true; }, close() { this.open = false; }, showModal() { this.open = true; },
   });
   const calls = [];
   const timers = new Map();
@@ -30,20 +31,24 @@ function fixture({ ignoreAbort = false, mode = 'hosting' } = {}) {
     window: { addEventListener() {}, confirm: () => true, setTimeout: scheduleTimer, location: { replace: (url) => redirects.push(url) } },
     fetch: (url, options) => new Promise((resolve, reject) => {
       calls.push({ url, options,
-        body: options.body ? JSON.parse(options.body) : undefined,
+        body: options.body instanceof FormData ? options.body : options.body ? JSON.parse(options.body) : undefined,
         respond: (payload, status = 200) => resolve({ ok: status < 400, status, text: async () => JSON.stringify(payload) }),
+        respondRaw: (raw, status = 200) => resolve({ ok: status < 400, status, text: async () => raw }),
         respondPendingBody: () => {
-          const pendingBody = new Promise((_resolveBody, rejectBody) => {
-            options.signal.addEventListener('abort', () => rejectBody(options.signal.reason), { once: true });
+          let resolveBody;
+          const pendingBody = new Promise((resolve, rejectBody) => {
+            resolveBody = resolve;
+            if (!ignoreAbort) options.signal.addEventListener('abort', () => rejectBody(options.signal.reason), { once: true });
           });
           resolve({ ok: true, status: 200, text: () => pendingBody });
+          return (payload) => resolveBody(JSON.stringify(payload));
         },
         reject,
       });
       if (!ignoreAbort) options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
     }),
   });
-  vm.runInContext(source + '\nglobalThis.api = {state,elements,broadcastSelectedHostScript,stopHostBroadcast,saveHostScripts,syncHostEditorToState,switchWorkbenchMode,loadLiveControl,applyLiveSnapshot,renderHostControl};', context);
+  vm.runInContext(source + '\nglobalThis.api = {state,elements,broadcastSelectedHostScript,stopHostBroadcast,saveHostScripts,syncHostEditorToState,switchWorkbenchMode,loadLiveControl,applyLiveSnapshot,renderHostControl,populateModelForm,saveModelConfig,loadModelConfig,loadKnowledge,setKnowledgeSnapshot,importKnowledgeFiles,deleteKnowledgeDocument,refreshHealth};', context);
   const api = context.api;
   const script = { id: 'opening', title: '开场', text: '已保存的主持词。' };
   const snapshot = (overrides = {}) => ({
@@ -90,6 +95,444 @@ test('管理页：播报回包延迟时可立即停止，晚到回包不恢复�
   assert.equal(app.state.liveControl.lastCommand, null);
   assert.equal(app.elements.hostControlMessage.textContent, stoppedMessage);
   assert.equal(app.state.liveBusy, false);
+});
+
+function modelFixture(options) {
+  const app = fixture(options);
+  const config = {
+    configured: true, hasApiKey: true, baseUrl: 'https://mock.invalid/v1', model: 'demo-model',
+    answerMode: 'grounded', temperature: 0.2, maxTokens: 800, timeoutMs: 30_000,
+    answerStyle: '已保存的回答风格。', noAnswerText: '请咨询工作人员。', serviceErrorText: '请稍后再试。', systemPrompt: '仅用给定资料回答。',
+  };
+  app.state.modelConfig = config;
+  app.populateModelForm(config);
+  app.elements.modelDialog.open = true;
+  const editModel = (field, value) => {
+    app.elements[field].value = value;
+    app.elements.modelForm.listeners.input?.({ target: app.elements[field] });
+  };
+  return { ...app, config, editModel };
+}
+
+function knowledgeFixture(options) {
+  const app = fixture(options);
+  const document = { id: 'kb-original', filename: '活动资料.txt', extension: '.txt', size: 18, textLength: 9, chunkCount: 1, importedAt: '2026-09-13T00:00:00Z', preview: '活动门票免费。' };
+  const knowledgeSnapshot = (revision, documents) => ({ revision, documentCount: documents.length, chunkCount: documents.length, documents });
+  const original = knowledgeSnapshot('knowledge-r1', [document]);
+  app.setKnowledgeSnapshot(original);
+  app.elements.knowledgeFiles.files = [new File(['活动地址为测试园区。'], '新资料.txt', { type: 'text/plain' })];
+  return { ...app, document, original, knowledgeSnapshot };
+}
+
+test('模型保存：配置最大超时仍有余量，响应头或正文悬挂均解除忙碌并保留新增草稿', async () => {
+  for (const stage of ['headers', 'body']) {
+    const app = modelFixture({ ignoreAbort: true });
+    app.editModel('modelTimeout', '120');
+    app.editModel('modelApiKey', 'submitted-placeholder-key');
+    const saving = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'test' } } });
+    const finishOldBody = stage === 'body' ? app.calls[0].respondPendingBody() : null;
+    await flush();
+    app.editModel('modelAnswerStyle', '等待期间新增的草稿。');
+    app.editModel('modelApiKey', 'new-unsaved-placeholder-key');
+    app.elements.modelClearKey.checked = true;
+    app.elements.modelForm.listeners.change({});
+    const deadlines = [...app.timers.values()].map(timer => timer.ms).filter(ms => ms > 3_200);
+    assert.ok(deadlines.some(ms => ms > 120_000 && ms <= 150_000), 'deadline covers configured model time plus transport margin');
+    app.runTimers(120_000);
+    await flush();
+    assert.equal(app.state.modelSaving, true);
+    app.runTimers(150_000);
+    await flush();
+    assert.equal(app.state.modelSaving, false, 'even an adapter ignoring abort must release the form');
+    await saving;
+    assert.equal(app.calls[0].options.signal.aborted, true);
+    assert.equal(app.elements.saveModelSettings.disabled, false);
+    assert.equal(app.elements.closeModelDialog.disabled, false);
+    let prevented = false;
+    app.elements.modelDialog.listeners.cancel({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, false);
+    assert.equal(app.elements.modelDialog.open, true);
+    assert.equal(app.elements.modelAnswerStyle.value, '等待期间新增的草稿。');
+    assert.equal(app.elements.modelApiKey.value, 'new-unsaved-placeholder-key');
+    assert.equal(app.elements.modelClearKey.checked, true);
+    assert.match(app.elements.modelMessage.textContent, /结果未知/);
+    assert.doesNotMatch(app.elements.modelMessage.textContent, /保存失败|连接成功|已生效/);
+    const recovery = app.calls[1];
+    assert.equal(recovery.url, '/api/model-config');
+    assert.equal(recovery.options.method, 'GET');
+    recovery.respond(app.config);
+    await flush();
+    assert.match(app.elements.modelMessage.textContent, /结果未知/, 'public metadata cannot prove a hidden key or connection test was saved');
+    if (finishOldBody) finishOldBody({ ...app.config, model: 'late-model' });
+    else app.calls[0].respond({ ...app.config, model: 'late-model' });
+    await flush();
+    assert.equal(app.state.modelConfig.model, app.config.model);
+    assert.equal(app.elements.modelApiKey.value, 'new-unsaved-placeholder-key');
+    assert.equal(app.calls.filter(call => call.options.method === 'PUT').length, 1);
+  }
+});
+
+test('模型保存：未知结果核对只读且有界，代理页或缺字段不覆盖配置、Key与提示', async () => {
+  for (const recoveryKind of ['timeout', 'proxy', 'incomplete']) {
+    const app = modelFixture({ ignoreAbort: true });
+    app.editModel('modelApiKey', 'kept-placeholder-key');
+    const saving = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'test' } } });
+    app.runTimers(150_000);
+    await flush();
+    assert.equal(app.state.modelSaving, false);
+    await saving;
+    assert.equal(app.calls.length, 2, 'one bounded read, no blind write retry');
+    const message = app.elements.modelMessage.textContent;
+    if (recoveryKind === 'timeout') app.runTimers(10_000);
+    else if (recoveryKind === 'proxy') app.calls[1].respondRaw('<html>proxy unavailable</html>');
+    else app.calls[1].respond({ configured: true });
+    await flush();
+    assert.equal(app.state.modelConfig, app.config);
+    assert.equal(app.elements.modelApiKey.value, 'kept-placeholder-key');
+    assert.equal(app.elements.modelMessage.textContent, message);
+    assert.match(message, /结果未知/);
+    if (recoveryKind === 'timeout') {
+      assert.equal(app.calls[1].options.signal.aborted, true);
+      app.calls[1].respond({ ...app.config, model: 'late-recovery-model' });
+      await flush();
+      assert.equal(app.state.modelConfig, app.config);
+    }
+    app.calls[0].respond(app.config);
+    await flush();
+    assert.equal(app.calls.length, 2);
+  }
+});
+
+test('模型保存：超时后的旧写入或旧核对不覆盖用户显式保存的新版本', async () => {
+  const app = modelFixture({ ignoreAbort: true });
+  const first = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'save' } } });
+  app.runTimers(150_000); await flush();
+  assert.equal(app.state.modelSaving, false);
+  await first;
+  app.editModel('modelAnswerStyle', '用户核对后显式保存的新风格。');
+  const next = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'save' } } });
+  app.calls[2].respond({ ...app.config, answerStyle: '用户核对后显式保存的新风格。' });
+  await next;
+  app.calls[0].respond(app.config);
+  app.calls[1].respond(app.config);
+  await flush();
+  assert.equal(app.state.modelConfig.answerStyle, '用户核对后显式保存的新风格。');
+  assert.equal(app.elements.modelAnswerStyle.value, '用户核对后显式保存的新风格。');
+});
+
+test('知识写入：导入、删除、迁移悬挂均有界解锁，保留文件且仅只读核对', async () => {
+  for (const action of ['import', 'delete', 'migrate']) {
+    for (const stage of ['headers', 'body']) {
+      const app = knowledgeFixture({ ignoreAbort: true });
+      const files = app.elements.knowledgeFiles.files;
+      app.state.legacyContent = { revision: 'legacy-r1', items: [] };
+      const work = action === 'import' ? app.importKnowledgeFiles({ preventDefault() {} })
+        : action === 'delete' ? app.deleteKnowledgeDocument(app.document)
+          : app.elements.migrateLegacy.listeners.click();
+      const finishOldBody = stage === 'body' ? app.calls[0].respondPendingBody() : null;
+      await flush();
+      assert.ok([...app.timers.values()].some(timer => timer.ms >= 120_000 && timer.ms <= 180_000), 'large knowledge files get an explicit parsing budget');
+      app.runTimers(180_000); await flush();
+      assert.equal(app.state.knowledgeImporting, false);
+      await work;
+      assert.equal(app.elements.knowledgeFiles.files, files);
+      for (const name of ['knowledgeFiles', 'refreshKnowledge', 'importKnowledge', 'migrateLegacy']) {
+        assert.equal(app.elements[name].disabled, false, `${name} must unlock`);
+      }
+      assert.match(app.elements.knowledgeMessage.textContent, /结果未知/);
+      assert.doesNotMatch(app.elements.knowledgeMessage.textContent, /已删除|已导入|失败/);
+      assert.equal(app.calls.length, 2);
+      assert.equal(app.calls[1].url, '/api/knowledge');
+      assert.equal(app.calls[1].options.method, 'GET');
+      const current = app.knowledgeSnapshot('knowledge-r2', []);
+      app.calls[1].respond(current); await flush();
+      assert.equal(app.state.knowledge.revision, 'knowledge-r2');
+      assert.match(app.elements.knowledgeMessage.textContent, /结果未知/);
+      if (finishOldBody) finishOldBody(app.original);
+      else app.calls[0].respond(app.original);
+      await flush();
+      assert.equal(app.state.knowledge.revision, 'knowledge-r2');
+      assert.equal(app.elements.knowledgeFiles.files, files);
+      assert.equal(app.calls.length, 2);
+    }
+  }
+});
+
+test('知识写入：未知结果的读取失败或代理页不清空原列表，晚到读取也不能覆盖下一次删除', async () => {
+  for (const kind of ['timeout', 'incomplete', 'proxy', 'late']) {
+    const app = knowledgeFixture({ ignoreAbort: true });
+    const work = app.deleteKnowledgeDocument(app.document);
+    app.runTimers(180_000); await flush();
+    assert.equal(app.state.knowledgeImporting, false);
+    await work;
+    if (kind === 'late') {
+      const next = app.deleteKnowledgeDocument(app.document);
+      app.calls[2].respond(app.knowledgeSnapshot('knowledge-r2', [])); await next;
+      app.calls[1].respond(app.original); await flush();
+      assert.equal(app.state.knowledge.revision, 'knowledge-r2');
+      assert.match(app.elements.knowledgeMessage.textContent, /已删除/);
+    } else {
+      if (kind === 'timeout') app.runTimers(10_000);
+      else if (kind === 'proxy') app.calls[1].respondRaw('<html>proxy unavailable</html>');
+      else app.calls[1].respond({ documents: [] });
+      await flush();
+      assert.equal(app.state.knowledge, app.original);
+      assert.match(app.elements.knowledgeMessage.textContent, /结果未知/);
+      if (kind === 'timeout') assert.equal(app.calls[1].options.signal.aborted, true);
+    }
+    app.calls[0].respond(app.original); await flush();
+  }
+});
+
+test('后台写入：明确 HTTP 拒绝仍显示真实错误；断网才保持结果未知且不重试写入', async () => {
+  for (const operation of ['model', 'knowledge']) {
+    for (const failure of ['network', '400', '401']) {
+      const app = operation === 'model' ? modelFixture() : knowledgeFixture();
+      if (operation === 'model') {
+        app.elements.modelClearKey.checked = true;
+        app.elements.modelForm.listeners.change({});
+      }
+      const work = operation === 'model'
+        ? app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'save' } } })
+        : app.deleteKnowledgeDocument(app.document);
+      if (failure === 'network') app.calls[0].reject(new TypeError('Failed to fetch'));
+      else app.calls[0].respond({ message: '明确拒绝本次操作。' }, Number(failure));
+      await work;
+      const message = operation === 'model' ? app.elements.modelMessage.textContent : app.elements.knowledgeMessage.textContent;
+      assert.equal(app.state.modelSaving, false);
+      assert.equal(app.state.knowledgeImporting, false);
+      if (failure === 'network') {
+        assert.match(message, /结果未知/);
+        assert.equal(app.calls.length, 2);
+        assert.equal(app.calls[1].options.method, 'GET');
+        app.calls[1].respond(operation === 'model' ? app.config : app.original);
+        await flush();
+        if (operation === 'model') assert.equal(app.elements.modelClearKey.checked, true);
+      } else {
+        assert.equal(message, '明确拒绝本次操作。');
+        assert.equal(app.calls.length, 1);
+        if (failure === '401') {
+          app.runTimers(0);
+          assert.deepEqual(app.redirects, ['/']);
+        }
+      }
+    }
+  }
+});
+
+test('后台写入：200 代理页或不完整 JSON 不冒充成功，不清模型字段或所选知识文件', async () => {
+  for (const operation of ['model', 'knowledge']) {
+    for (const invalid of ['html', 'partial']) {
+      const app = operation === 'model' ? modelFixture() : knowledgeFixture();
+      if (operation === 'model') app.editModel('modelApiKey', 'retained-placeholder-key');
+      const files = app.elements.knowledgeFiles.files;
+      const work = operation === 'model'
+        ? app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'test' } } })
+        : app.importKnowledgeFiles({ preventDefault() {} });
+      if (invalid === 'html') app.calls[0].respondRaw('<html>gateway error</html>');
+      else app.calls[0].respond(operation === 'model' ? { configured: true } : { documents: [] });
+      await work;
+      assert.equal(app.state.modelSaving, false);
+      assert.equal(app.state.knowledgeImporting, false);
+      if (operation === 'model') {
+        assert.equal(app.state.modelConfig, app.config);
+        assert.equal(app.elements.modelApiKey.value, 'retained-placeholder-key');
+        assert.match(app.elements.modelMessage.textContent, /结果未知/);
+      } else {
+        assert.equal(app.state.knowledge, app.original);
+        assert.equal(app.elements.knowledgeFiles.files, files);
+        assert.match(app.elements.knowledgeMessage.textContent, /结果未知/);
+      }
+      assert.equal(app.calls.length, 2);
+      assert.equal(app.calls[1].options.method, 'GET');
+      app.calls[1].respond(operation === 'model' ? app.config : app.original); await flush();
+    }
+  }
+});
+
+test('模型表单：保存或测试期间的新输入必须保留并明确提示尚未保存', async () => {
+  for (const action of ['save', 'test']) {
+    const app = modelFixture();
+    const pending = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action } } });
+    app.editModel('modelAnswerStyle', '请求期间新输入的风格。');
+    app.calls[0].respond({ ...app.config, ...(action === 'test' ? { connectionTest: { model: 'demo-model', latencyMs: 2000 } } : {}) });
+    await pending;
+    assert.equal(app.elements.modelAnswerStyle.value, '请求期间新输入的风格。');
+    assert.equal(app.elements.modelDialog.open, true);
+    assert.match(app.elements.modelMessage.textContent, /新增编辑.*未保存/);
+    assert.equal(app.state.modelConfig.answerStyle, app.config.answerStyle);
+    assert.equal(app.state.modelSaving, false);
+  }
+});
+
+test('模型表单：保存成功清除已提交 Key，但必须保留等待期间重新输入的新 Key', async () => {
+  for (const changeKey of [false, true]) {
+    const app = modelFixture();
+    app.editModel('modelApiKey', 'submitted-placeholder-key');
+    const pending = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'test' } } });
+    app.editModel('modelAnswerStyle', '提交后继续编辑风格。');
+    if (changeKey) app.editModel('modelApiKey', 'new-unsaved-placeholder-key');
+    app.calls[0].respond({ ...app.config, connectionTest: { model: 'demo-model', latencyMs: 2000 } });
+    await pending;
+    assert.equal(app.elements.modelApiKey.value, changeKey ? 'new-unsaved-placeholder-key' : '');
+    assert.equal(app.elements.modelAnswerStyle.value, '提交后继续编辑风格。');
+  }
+});
+
+test('模型表单：保存失败不丢新输入，保存前发出的配置读取也不能回退新配置', async () => {
+  for (const oldStatus of [200, 503]) {
+    const app = modelFixture();
+    const oldLoad = app.loadModelConfig();
+    app.editModel('modelAnswerStyle', '本次保存的风格。');
+    const save = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'save' } } });
+    app.calls[1].respond({ ...app.config, answerStyle: '本次保存的风格。' });
+    await save;
+    app.calls[0].respond(oldStatus === 200 ? app.config : { message: '旧配置读取失败。' }, oldStatus);
+    await oldLoad;
+    assert.equal(app.state.modelConfig.answerStyle, '本次保存的风格。');
+    app.editModel('modelAnswerStyle', '重试前的草稿。');
+    const failed = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'save' } } });
+    app.editModel('modelAnswerStyle', '失败等待期间继续输入的草稿。');
+    app.calls[2].respond({ message: '暂时无法保存。' }, 500);
+    await failed;
+    assert.equal(app.elements.modelAnswerStyle.value, '失败等待期间继续输入的草稿。');
+    assert.match(app.elements.modelMessage.textContent, /新增编辑.*未保存/);
+    assert.equal(app.state.modelSaving, false);
+  }
+});
+
+test('知识库：删除成功后迟到的旧刷新成功回包不能恢复已删除文档', async () => {
+  const app = knowledgeFixture();
+  const oldLoad = app.loadKnowledge();
+  const deletion = app.deleteKnowledgeDocument(app.document);
+  app.calls[1].respond(app.knowledgeSnapshot('knowledge-r2', []));
+  await deletion;
+  app.calls[0].respond(app.original);
+  await oldLoad;
+  assert.equal(app.state.knowledge.revision, 'knowledge-r2');
+  assert.equal(app.state.knowledge.documentCount, 0);
+  assert.match(app.elements.knowledgeMessage.textContent, /已删除/);
+});
+
+test('知识库：导入成功后迟到的旧刷新错误回包不能清空新知识状态', async () => {
+  const app = knowledgeFixture();
+  const oldLoad = app.loadKnowledge();
+  const importing = app.importKnowledgeFiles({ preventDefault() {} });
+  const added = { ...app.document, id: 'kb-new', filename: '新资料.txt' };
+  app.calls[1].respond({ ...app.knowledgeSnapshot('knowledge-r2', [app.document, added]), imported: [added], skipped: [] });
+  await importing;
+  app.calls[0].respond({ message: '旧读取失败。' }, 503);
+  await oldLoad;
+  assert.equal(app.state.knowledge?.revision, 'knowledge-r2');
+  assert.equal(app.state.knowledge?.documentCount, 2);
+  assert.equal(app.elements.knowledgeStorageState.textContent, '已持久化');
+});
+
+test('知识库：多个刷新只接受最新请求的结果，忽略较早成功或失败回包', async () => {
+  for (const oldStatus of [200, 503]) {
+    const app = knowledgeFixture();
+    const oldLoad = app.loadKnowledge();
+    const newestLoad = app.loadKnowledge();
+    app.calls[1].respond(app.knowledgeSnapshot('knowledge-r2', []));
+    await newestLoad;
+    app.calls[0].respond(oldStatus === 200 ? app.original : { message: '旧请求失败。' }, oldStatus);
+    await oldLoad;
+    assert.equal(app.state.knowledge?.revision, 'knowledge-r2');
+    assert.equal(app.state.knowledge?.documentCount, 0);
+  }
+});
+
+test('知识库：导入与删除不能在同一页面并发写入，失败后解锁并允许最新刷新', async () => {
+  const app = knowledgeFixture();
+  const importing = app.importKnowledgeFiles({ preventDefault() {} });
+  const deletion = app.deleteKnowledgeDocument(app.document);
+  assert.equal(app.calls.length, 1);
+  assert.equal(await app.loadKnowledge(), false);
+  app.calls[0].respond({ message: '导入失败，请重试。' }, 500);
+  await Promise.all([importing, deletion]);
+  assert.equal(app.state.knowledgeImporting, false);
+  assert.equal(app.elements.importKnowledge.disabled, false);
+  const refresh = app.loadKnowledge();
+  app.calls[1].respond(app.knowledgeSnapshot('knowledge-r3', []));
+  await refresh;
+  assert.equal(app.state.knowledge.revision, 'knowledge-r3');
+});
+
+test('知识库：修改前或修改中发起的健康检查不能回退已确认的文件数量', async () => {
+  for (const startsDuringDelete of [false, true]) {
+    const app = knowledgeFixture();
+    let health;
+    if (!startsDuringDelete) health = app.refreshHealth();
+    const deletion = app.deleteKnowledgeDocument(app.document);
+    if (startsDuringDelete) health = app.refreshHealth();
+    const deleteCall = app.calls.find(call => call.options.method === 'DELETE');
+    const healthCall = app.calls.find(call => call.url === '/health');
+    deleteCall.respond(app.knowledgeSnapshot('knowledge-r2', []));
+    await deletion;
+    healthCall.respond({ ready: true, knowledge: { documentCount: 1 } });
+    await health;
+    assert.equal(app.elements.knowledgeCount.textContent, '0');
+    assert.equal(app.state.knowledge.revision, 'knowledge-r2');
+    const latestHealth = app.refreshHealth();
+    app.calls.at(-1).respond({ ready: true, knowledge: { documentCount: 2 } });
+    await latestHealth;
+    assert.equal(app.elements.knowledgeCount.textContent, '2', 'fresh health still updates the count');
+  }
+});
+
+test('模型状态：保存前或保存中发起的健康检查不能恢复旧模型名', async () => {
+  for (const startsDuringSave of [false, true]) {
+    const app = modelFixture();
+    let health;
+    if (!startsDuringSave) health = app.refreshHealth();
+    app.editModel('modelName', 'new-model');
+    const save = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action: 'test' } } });
+    if (startsDuringSave) health = app.refreshHealth();
+    const saveCall = app.calls.find(call => call.options.method === 'PUT');
+    const healthCall = app.calls.find(call => call.url === '/health');
+    saveCall.respond({ ...app.config, model: 'new-model', connection: { status: 'available' } });
+    await save;
+    healthCall.respond({ ready: false, model: { configured: true, model: 'old-model', status: 'unavailable' } });
+    await health;
+    assert.equal(app.elements.modelStatus.textContent, 'new-model · 连接可用');
+    assert.equal(app.state.modelConfig.model, 'new-model');
+    const latestHealth = app.refreshHealth();
+    app.calls.at(-1).respond({ ready: true, model: { configured: true, model: 'new-model', status: 'available' } });
+    await latestHealth;
+    assert.equal(app.elements.modelStatus.textContent, 'new-model · 连接可用');
+  }
+});
+
+test('模型表单：无新增编辑保持保存关闭与测试留窗行为，忙碌期间阻止 Escape 关闭', async () => {
+  for (const action of ['save', 'test']) {
+    const app = modelFixture();
+    const save = app.saveModelConfig({ preventDefault() {}, submitter: { dataset: { action } } });
+    let prevented = false;
+    app.elements.modelDialog.listeners.cancel?.({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    app.calls[0].respond({ ...app.config, ...(action === 'test' ? { connectionTest: { model: 'demo-model', latencyMs: 20 } } : {}) });
+    await save;
+    assert.equal(app.elements.modelDialog.open, action === 'test');
+    assert.doesNotMatch(app.elements.modelMessage.textContent, /新增编辑/);
+    prevented = false;
+    app.elements.modelDialog.listeners.cancel?.({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, false);
+  }
+});
+
+test('知识库：刷新按钮的迟到结果不能覆盖删除成功提示', async () => {
+  for (const oldStatus of [200, 503]) {
+    const app = knowledgeFixture();
+    const refreshing = app.elements.refreshKnowledge.listeners.click();
+    const deletion = app.deleteKnowledgeDocument(app.document);
+    app.calls[1].respond(app.knowledgeSnapshot('knowledge-r2', []));
+    await deletion;
+    const deletionMessage = app.elements.knowledgeMessage.textContent;
+    app.calls[0].respond(oldStatus === 200 ? app.original : { message: '旧读取失败。' }, oldStatus);
+    await refreshing;
+    assert.match(deletionMessage, /已删除/);
+    assert.equal(app.elements.knowledgeMessage.textContent, deletionMessage);
+  }
 });
 
 test('管理页：从对话模式直接播报时，回包前也可停止', async () => {

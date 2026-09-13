@@ -271,6 +271,8 @@ Add `speechProviders.server` and `voiceInputProviders.server`. Reuse the existin
 
 ### Cancellation across the complete pipeline
 
+Current `/answer` supports request-disconnect and control-generation cancellation. If an in-flight turn returns HTTP 409 with `answerStatus: "cancelled"`, `cancellationReason: "LIVE_CONTROL_CHANGED"`, and empty `answer/speechText`, external frontends must discard it instead of synthesizing an empty-answer fallback. The error is `HOSTING_MODE_ACTIVE` or `ANSWER_CANCELLED`. Control loss pauses old interactions; valid synchronization permits new questions. See the [cancellation contract and verification](FIX_REVIEW_20260913_R2.en.md). The audio/ASR cleanup requirements below also apply to future adapters; they do not mean an external speech provider is already integrated.
+
 - Preserve cancellation semantics for a new question, hosting command, stop, mode switch, mute, and control disconnect.
 - In addition to `speechSynthesis.cancel()`, abort the current audio request, stop `<audio>`, clear playback queues, and release Blob URLs. Stop microphone tracks when ASR is cancelled.
 - Reject late results using `speechSequence`, `requestSequence`, and hosting `instanceId + commandSequence`. Even when upstream computation cannot be stopped, obsolete audio must never play.
