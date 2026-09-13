@@ -1,8 +1,13 @@
 const state = {
   modelConfig: null,
   modelSaving: false,
+  modelEditSequence: 0,
+  modelSaveSequence: 0,
+  modelReadSequence: 0,
   knowledge: null,
   knowledgeImporting: false,
+  knowledgeGeneration: 0,
+  knowledgeReadSequence: 0,
   liveControl: null,
   hostScripts: [],
   hostRevision: null,
@@ -26,6 +31,9 @@ const state = {
   toastTimer: null,
   legacyContent: null,
 };
+
+const SETTINGS_READ_TIMEOUT_MS = 10_000;
+const KNOWLEDGE_WRITE_TIMEOUT_MS = 180_000;
 
 const elements = {
   statusDot: document.querySelector('#status-dot'),
@@ -132,6 +140,10 @@ async function requestJson(url, options = {}) {
   }
 
   const controller = new AbortController();
+  let rejectInterrupted;
+  const interrupted = new Promise((_, reject) => { rejectInterrupted = reject; });
+  const onAbort = () => rejectInterrupted(controller.signal.reason);
+  controller.signal.addEventListener('abort', onAbort, { once: true });
   const forwardAbort = () => controller.abort(options.signal.reason);
   if (options.signal?.aborted) forwardAbort();
   else options.signal?.addEventListener('abort', forwardAbort, { once: true });
@@ -143,13 +155,22 @@ async function requestJson(url, options = {}) {
   let response;
   let raw;
   try {
-    response = await fetch(url, {
-      method: options.method ?? 'GET', headers, signal: controller.signal,
-      body: hasBody
-        ? formDataBody ? options.body : JSON.stringify(options.body)
-        : undefined,
-    });
-    raw = await response.text();
+    const receive = async () => {
+      controller.signal.throwIfAborted();
+      const response = await fetch(url, {
+        method: options.method ?? 'GET', headers, signal: controller.signal,
+        body: hasBody
+          ? formDataBody ? options.body : JSON.stringify(options.body)
+          : undefined,
+      });
+      controller.signal.throwIfAborted();
+      const raw = await response.text();
+      controller.signal.throwIfAborted();
+      return { response, raw };
+    };
+    // Cover headers and body even when an adapter ignores abort. A late
+    // response is observed but cannot continue into callers' state updates.
+    ({ response, raw } = await Promise.race([receive(), interrupted]));
   } catch (error) {
     if (timedOut) {
       const timeoutError = new Error('请求超时，执行结果尚未确认。请刷新状态；需要停止时可再次点击停止。');
@@ -159,6 +180,7 @@ async function requestJson(url, options = {}) {
     throw error;
   } finally {
     clearTimeout(timer);
+    controller.signal.removeEventListener('abort', onAbort);
     options.signal?.removeEventListener('abort', forwardAbort);
   }
   let payload = {};
@@ -998,7 +1020,18 @@ function closeOpsLogs() {
   elements.opsDialog.close();
 }
 
+function validKnowledgeSnapshot(snapshot) {
+  return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) &&
+    typeof snapshot.revision === 'string' && snapshot.revision.length > 0 &&
+    Array.isArray(snapshot.documents) && snapshot.documentCount === snapshot.documents.length &&
+    Number.isSafeInteger(snapshot.chunkCount) && snapshot.chunkCount >= 0 &&
+    snapshot.documents.every(document => document &&
+      ['id', 'filename', 'extension', 'importedAt', 'preview'].every(key => typeof document[key] === 'string') &&
+      ['size', 'textLength', 'chunkCount'].every(key => Number.isSafeInteger(document[key]) && document[key] >= 0));
+}
+
 function setKnowledgeSnapshot(snapshot) {
+  if (!validKnowledgeSnapshot(snapshot)) throw new Error('服务器返回的知识库状态不完整。');
   state.knowledge = snapshot;
   elements.knowledgeCount.textContent = String(snapshot.documentCount ?? 0);
   elements.knowledgeChunkCount.textContent = String(snapshot.chunkCount ?? 0);
@@ -1097,6 +1130,7 @@ function renderKnowledgeDocuments() {
     remove.type = 'button';
     remove.className = 'danger';
     remove.textContent = '删除';
+    remove.disabled = state.knowledgeImporting;
     remove.addEventListener('click', () => {
       void deleteKnowledgeDocument(knowledgeDocument);
     });
@@ -1107,22 +1141,46 @@ function renderKnowledgeDocuments() {
   }
 }
 
-async function loadKnowledge({ silent = false } = {}) {
+async function loadKnowledge({ silent = false, preserveOnError = false } = {}) {
+  if (state.knowledgeImporting) return false;
+  const generation = state.knowledgeGeneration;
+  const readSequence = ++state.knowledgeReadSequence;
+  const current = () => generation === state.knowledgeGeneration &&
+    readSequence === state.knowledgeReadSequence && !state.knowledgeImporting;
   try {
-    const snapshot = await requestJson('/api/knowledge');
+    const snapshot = await requestJson('/api/knowledge', { timeoutMs: SETTINGS_READ_TIMEOUT_MS });
+    if (!current()) return null;
     setKnowledgeSnapshot(snapshot);
     return true;
   } catch (error) {
-    state.knowledge = null;
-    elements.knowledgeCount.textContent = '—';
-    elements.knowledgeChunkCount.textContent = '—';
-    elements.knowledgeStorageState.textContent = '读取失败';
-    renderKnowledgeDocuments();
+    if (!current()) return null;
+    if (!preserveOnError) {
+      state.knowledge = null;
+      elements.knowledgeCount.textContent = '—';
+      elements.knowledgeChunkCount.textContent = '—';
+      elements.knowledgeStorageState.textContent = '读取失败';
+      renderKnowledgeDocuments();
+    }
     if (!silent && error.status !== 401) {
       showToast(error.message, 'error');
     }
     return false;
   }
+}
+
+function writeResultIsUnknown(error) {
+  return error.code === 'REQUEST_TIMEOUT' || error.status === undefined;
+}
+
+function reportKnowledgeWriteError(error) {
+  const unknown = writeResultIsUnknown(error);
+  const message = unknown
+    ? '知识库更新结果未知，选中文件已保留。请核对当前列表后再操作，请勿直接重复导入或替换。'
+    : error.message;
+  elements.knowledgeMessage.textContent = message;
+  elements.knowledgeMessage.classList.remove('success');
+  showToast(message, 'error');
+  return unknown;
 }
 
 async function loadLegacyContent() {
@@ -1135,16 +1193,21 @@ async function loadLegacyContent() {
 }
 
 elements.migrateLegacy.addEventListener('click', async () => {
+  if (state.knowledgeImporting) return;
   if (!state.legacyContent || !window.confirm('将历史问答迁入为知识文件？原备份会保留，迁入后可在知识文件列表中删除。')) return;
-  elements.migrateLegacy.disabled = true;
+  setKnowledgeBusy(true, 'update');
+  let unknownResult = false;
   try {
     const snapshot = await requestJson('/api/knowledge/migrate-legacy', {
-      method: 'POST', body: { revision: state.legacyContent.revision },
+      method: 'POST', body: { revision: state.legacyContent.revision }, timeoutMs: KNOWLEDGE_WRITE_TIMEOUT_MS,
     });
     setKnowledgeSnapshot(snapshot);
     showToast('历史内容已迁入知识文件列表。');
-  } catch (error) { showToast(error.message, 'error'); }
-  finally { elements.migrateLegacy.disabled = false; }
+  } catch (error) { unknownResult = reportKnowledgeWriteError(error); }
+  finally {
+    setKnowledgeBusy(false);
+    if (unknownResult) void loadKnowledge({ silent: true, preserveOnError: true });
+  }
 });
 
 elements.downloadLegacy.addEventListener('click', () => {
@@ -1157,16 +1220,22 @@ elements.downloadLegacy.addEventListener('click', () => {
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 });
 
-function setKnowledgeBusy(busy) {
+function setKnowledgeBusy(busy, operation = 'import') {
+  // Invalidate reads started either before or during a mutation, including health polls.
+  if (busy !== state.knowledgeImporting) state.knowledgeGeneration += 1;
   state.knowledgeImporting = busy;
   elements.importKnowledge.disabled = busy;
   elements.knowledgeFiles.disabled = busy;
   elements.refreshKnowledge.disabled = busy;
+  elements.migrateLegacy.disabled = busy;
+  for (const button of elements.knowledgeDocumentList.querySelectorAll('button.danger')) {
+    button.disabled = busy;
+  }
   for (const input of elements.knowledgeModeInputs) {
     input.disabled = busy;
   }
   elements.importKnowledge.textContent = busy
-    ? '正在解析并保存…'
+    ? (operation === 'import' ? '正在解析并保存…' : '正在更新知识库…')
     : '导入并保存';
 }
 
@@ -1211,12 +1280,14 @@ async function importKnowledgeFiles(event) {
   }
 
   setKnowledgeBusy(true);
+  let unknownResult = false;
   elements.knowledgeMessage.textContent = '正在提取文字、切分片段并持久化…';
   elements.knowledgeMessage.classList.remove('success');
   try {
     const result = await requestJson('/api/knowledge/import', {
       method: 'POST',
       body: formData,
+      timeoutMs: KNOWLEDGE_WRITE_TIMEOUT_MS,
     });
     setKnowledgeSnapshot(result);
     elements.knowledgeFiles.value = '';
@@ -1233,15 +1304,15 @@ async function importKnowledgeFiles(event) {
     showToast('知识库已持久化并立即生效。');
     void refreshHealth();
   } catch (error) {
-    elements.knowledgeMessage.textContent = error.message;
-    elements.knowledgeMessage.classList.remove('success');
-    showToast(error.message, 'error');
+    unknownResult = reportKnowledgeWriteError(error);
   } finally {
     setKnowledgeBusy(false);
+    if (unknownResult) void loadKnowledge({ silent: true, preserveOnError: true });
   }
 }
 
 async function deleteKnowledgeDocument(knowledgeDocument) {
+  if (state.knowledgeImporting) return;
   if (
     !window.confirm(
       `确定删除“${knowledgeDocument.filename}”吗？原文件和已提取的知识片段都会删除。`,
@@ -1250,19 +1321,22 @@ async function deleteKnowledgeDocument(knowledgeDocument) {
     return;
   }
 
+  setKnowledgeBusy(true, 'update');
+  let unknownResult = false;
   try {
     const snapshot = await requestJson(
       `/api/knowledge/${encodeURIComponent(knowledgeDocument.id)}`,
-      { method: 'DELETE' },
+      { method: 'DELETE', timeoutMs: KNOWLEDGE_WRITE_TIMEOUT_MS },
     );
     setKnowledgeSnapshot(snapshot);
     elements.knowledgeMessage.textContent = `已删除“${knowledgeDocument.filename}”。`;
     elements.knowledgeMessage.classList.add('success');
     showToast('文件知识已删除。');
   } catch (error) {
-    elements.knowledgeMessage.textContent = error.message;
-    elements.knowledgeMessage.classList.remove('success');
-    showToast(error.message, 'error');
+    unknownResult = reportKnowledgeWriteError(error);
+  } finally {
+    setKnowledgeBusy(false);
+    if (unknownResult) void loadKnowledge({ silent: true, preserveOnError: true });
   }
 }
 
@@ -1312,9 +1386,7 @@ function setModelStatus(config) {
   elements.modelStatus.textContent = `${config.model} · ${label}`;
 }
 
-function populateModelForm(config) {
-  elements.modelBaseUrl.value = config.baseUrl ?? '';
-  elements.modelApiKey.value = '';
+function updateModelKeyState(config) {
   elements.modelApiKey.placeholder = config.hasApiKey
     ? '已安全保存；留空保持不变'
     : '输入 API Key';
@@ -1322,6 +1394,12 @@ function populateModelForm(config) {
     ? '服务器已保存'
     : '尚未保存';
   elements.modelClearRow.hidden = !config.hasApiKey;
+}
+
+function populateModelForm(config) {
+  elements.modelBaseUrl.value = config.baseUrl ?? '';
+  elements.modelApiKey.value = '';
+  updateModelKeyState(config);
   elements.modelClearKey.checked = false;
   elements.modelName.value = config.model ?? '';
   elements.modelAnswerMode.value = config.answerMode ?? 'grounded';
@@ -1336,16 +1414,33 @@ function populateModelForm(config) {
   elements.modelMessage.classList.remove('success');
 }
 
-async function loadModelConfig() {
+function validModelConfigSnapshot(config) {
+  return config && typeof config === 'object' && !Array.isArray(config) &&
+    typeof config.configured === 'boolean' && typeof config.hasApiKey === 'boolean' &&
+    ['baseUrl', 'model', 'answerMode', 'answerStyle', 'noAnswerText', 'serviceErrorText', 'systemPrompt']
+      .every(key => typeof config[key] === 'string') &&
+    ['temperature', 'maxTokens', 'timeoutMs'].every(key => Number.isFinite(config[key]));
+}
+
+async function loadModelConfig({ silent = false, preserveOnError = false } = {}) {
+  if (state.modelSaving) return false;
+  const saveSequence = state.modelSaveSequence;
+  const readSequence = ++state.modelReadSequence;
+  const current = () => saveSequence === state.modelSaveSequence && readSequence === state.modelReadSequence;
   try {
-    const config = await requestJson('/api/model-config');
+    const config = await requestJson('/api/model-config', { timeoutMs: SETTINGS_READ_TIMEOUT_MS });
+    if (!current()) return false;
+    if (!validModelConfigSnapshot(config)) throw new Error('服务器返回的模型设置不完整。');
     state.modelConfig = config;
     setModelStatus(config);
     return true;
   } catch (error) {
-    state.modelConfig = null;
-    setModelStatus(null);
-    if (error.status !== 401) {
+    if (!current()) return false;
+    if (!preserveOnError) {
+      state.modelConfig = null;
+      setModelStatus(null);
+    }
+    if (!silent && error.status !== 401) {
       showToast(error.message, 'error');
     }
     return false;
@@ -1399,6 +1494,8 @@ async function saveModelConfig(event) {
   }
 
   const requestBody = modelRequestFromForm();
+  const editSequence = state.modelEditSequence;
+  state.modelSaveSequence += 1;
   const connectionChanged =
     requestBody.baseUrl !== (state.modelConfig?.baseUrl ?? '') ||
     requestBody.model !== (state.modelConfig?.model ?? '') ||
@@ -1413,6 +1510,12 @@ async function saveModelConfig(event) {
   const shouldTest =
     event.submitter?.dataset.action === 'test' ||
     (connectionChanged && candidateConfigured);
+  // The model call may use the full configured timeout. Leave additional
+  // transport/persistence time, with a bounded budget even for malformed input.
+  const modelTimeoutMs = Number.isFinite(requestBody.timeoutMs)
+    ? Math.max(1_000, Math.min(120_000, requestBody.timeoutMs)) : 30_000;
+  const saveTimeoutMs = Math.max(30_000, modelTimeoutMs + 15_000);
+  let unknownResult = false;
   setModelFormBusy(true);
   elements.modelMessage.textContent = shouldTest
     ? '正在验证候选设置；验证成功后才会切换…'
@@ -1422,56 +1525,86 @@ async function saveModelConfig(event) {
   try {
     const config = await requestJson('/api/model-config', {
       method: 'PUT',
+      timeoutMs: saveTimeoutMs,
       body: {
         ...requestBody,
         testConnection: shouldTest,
       },
     });
+    if (!validModelConfigSnapshot(config)) throw new Error('服务器返回的模型设置不完整。');
     state.modelConfig = config;
     setModelStatus(config);
-    populateModelForm(config);
-    elements.modelMessage.textContent = config.connectionTest
+    const newerEdits = state.modelEditSequence !== editSequence;
+    if (newerEdits) {
+      // Consume only the submitted credential action. A newly typed Key or
+      // other field belongs to the next save and must remain in the editor.
+      if (elements.modelApiKey.value === requestBody.apiKey) elements.modelApiKey.value = '';
+      if (elements.modelClearKey.checked === requestBody.clearApiKey) elements.modelClearKey.checked = false;
+      updateModelKeyState(config);
+    } else {
+      populateModelForm(config);
+    }
+    elements.modelMessage.textContent = newerEdits
+      ? '本次提交已保存；新增编辑已保留，尚未保存。'
+      : config.connectionTest
       ? `连接成功：${config.connectionTest.model}，耗时 ${config.connectionTest.latencyMs} ms；新设置已生效。`
       : config.configured
         ? '模型设置已保存但尚未验证，API Key 不会在页面回显。'
         : '设置已保存，但 API 地址、Key 或模型名尚未完整配置。';
-    elements.modelMessage.classList.add('success');
+    elements.modelMessage.classList.toggle('success', !newerEdits);
 
-    if (shouldTest) {
+    if (newerEdits) {
+      showToast('本次提交已保存；新增编辑尚未保存。');
+    } else if (shouldTest) {
       showToast('候选模型设置验证成功并已生效。');
     } else {
       showToast('模型设置已保存。');
       elements.modelDialog.close();
     }
   } catch (error) {
-    elements.modelMessage.textContent = error.message;
+    unknownResult = writeResultIsUnknown(error);
+    const message = unknownResult
+      ? '模型保存结果未知，输入及 Key 操作已保留。请核对服务器当前设置后再操作，请勿直接重复提交。'
+      : `${error.message}${state.modelEditSequence !== editSequence ? ' 新增编辑已保留，尚未保存。' : ''}`;
+    elements.modelMessage.textContent = message;
     elements.modelMessage.classList.remove('success');
-    showToast(error.message, 'error');
+    showToast(message, 'error');
   } finally {
     setModelFormBusy(false);
+    // This reads only the current public metadata, not an acknowledgement of
+    // this write or its hidden Key/test. Never clear the draft or retry a PUT.
+    if (unknownResult) void loadModelConfig({ silent: true, preserveOnError: true });
   }
 }
 
 async function refreshHealth() {
+  const knowledgeGeneration = state.knowledgeGeneration;
+  const knowledgeReadSequence = state.knowledgeReadSequence;
+  const modelSaveSequence = state.modelSaveSequence;
+  const startedDuringModelSave = state.modelSaving;
+  const currentModel = () => !startedDuringModelSave && !state.modelSaving &&
+    modelSaveSequence === state.modelSaveSequence;
   try {
     const health = await requestJson('/health');
-    if (health.liveControl?.mode === 'hosting') {
-      setServiceStatus('online', '主持模式运行中');
-    } else if (!health.ready) {
-      setServiceStatus(
-        'offline',
-        health.model?.status === 'unconfigured'
-          ? '问答模型待配置'
-          : '问答服务不可用',
-      );
-    } else if (health.content?.status === 'stale') {
-      setServiceStatus('online', '可用，内容为上一有效版本');
-    } else if (health.model?.status === 'unverified') {
-      setServiceStatus('online', '可用，模型尚未验证');
-    } else {
-      setServiceStatus('online', '运行正常');
+    if (currentModel()) {
+      if (health.liveControl?.mode === 'hosting') {
+        setServiceStatus('online', '主持模式运行中');
+      } else if (!health.ready) {
+        setServiceStatus(
+          'offline',
+          health.model?.status === 'unconfigured'
+            ? '问答模型待配置'
+            : '问答服务不可用',
+        );
+      } else if (health.content?.status === 'stale') {
+        setServiceStatus('online', '可用，内容为上一有效版本');
+      } else if (health.model?.status === 'unverified') {
+        setServiceStatus('online', '可用，模型尚未验证');
+      } else {
+        setServiceStatus('online', '运行正常');
+      }
     }
-    if (health.model) {
+    if (health.model && currentModel()) {
       const modelConfig = {
         configured: health.model.configured,
         model: health.model.model,
@@ -1479,13 +1612,14 @@ async function refreshHealth() {
       };
       setModelStatus(modelConfig);
     }
-    if (health.knowledge) {
+    if (health.knowledge && !state.knowledgeImporting && knowledgeGeneration === state.knowledgeGeneration &&
+        knowledgeReadSequence === state.knowledgeReadSequence) {
       elements.knowledgeCount.textContent = String(
         health.knowledge.documentCount ?? 0,
       );
     }
   } catch {
-    setServiceStatus('offline', '无法连接');
+    if (currentModel()) setServiceStatus('offline', '无法连接');
   }
 }
 
@@ -1501,6 +1635,7 @@ elements.knowledgeForm.addEventListener('submit', importKnowledgeFiles);
 elements.refreshKnowledge.addEventListener('click', async () => {
   elements.knowledgeMessage.textContent = '正在刷新…';
   const loaded = await loadKnowledge({ silent: true });
+  if (loaded === null) return;
   elements.knowledgeMessage.textContent = loaded ? '列表已刷新。' : '列表刷新失败。';
   elements.knowledgeMessage.classList.toggle('success', loaded);
 });
@@ -1514,6 +1649,11 @@ elements.cancelModelSettings.addEventListener('click', () => {
   elements.modelDialog.close();
 });
 elements.modelForm.addEventListener('submit', saveModelConfig);
+elements.modelForm.addEventListener('input', () => { state.modelEditSequence += 1; });
+elements.modelForm.addEventListener('change', () => { state.modelEditSequence += 1; });
+elements.modelDialog.addEventListener('cancel', (event) => {
+  if (state.modelSaving) event.preventDefault();
+});
 elements.openOpsDialog.addEventListener('click', () => {
   void openOpsLogs();
 });

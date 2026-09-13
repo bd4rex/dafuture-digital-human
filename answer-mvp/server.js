@@ -946,11 +946,29 @@ export function parseModelAnswer(content, config) {
   };
 }
 
-async function callLanguageModel(config, messages, fetchImplementation) {
+async function awaitModelOperation(operation, signal) {
+  signal.throwIfAborted();
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    // A provider adapter may ignore its signal. The route must still stop
+    // waiting, and the late operation remains observed by Promise.race.
+    return await Promise.race([operation(), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function callLanguageModel(config, messages, fetchImplementation, cancellationSignal) {
   const deadlineSignal = AbortSignal.timeout(config.timeoutMs);
+  const signal = cancellationSignal
+    ? AbortSignal.any([deadlineSignal, cancellationSignal]) : deadlineSignal;
   let response;
   try {
-    response = await fetchImplementation(chatCompletionsUrl(config.baseUrl), {
+    response = await awaitModelOperation(() => fetchImplementation(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -963,9 +981,10 @@ async function callLanguageModel(config, messages, fetchImplementation) {
         temperature: config.temperature,
         max_tokens: config.maxTokens,
       }),
-      signal: deadlineSignal,
-    });
+      signal,
+    }), signal);
   } catch (error) {
+    if (cancellationSignal?.aborted) throw cancellationSignal.reason;
     if (error.name === 'TimeoutError' || error.name === 'AbortError') {
       throw modelProviderError(
         'MODEL_TIMEOUT',
@@ -990,8 +1009,9 @@ async function callLanguageModel(config, messages, fetchImplementation) {
   }
   let payload;
   try {
-    payload = await response.json();
+    payload = await awaitModelOperation(() => response.json(), signal);
   } catch (cause) {
+    if (cancellationSignal?.aborted) throw cancellationSignal.reason;
     const timedOut = deadlineSignal.aborted ||
       ['TimeoutError', 'AbortError'].includes(cause?.name);
     // A complete but invalid JSON document and a prematurely closed socket
@@ -1566,7 +1586,9 @@ export async function buildApp(options = {}) {
   ) => {
     const startedAt = Date.now();
     try {
-      const result = await callLanguageModel(config, messages, llmFetch);
+      request?.ensureAnswerActive?.();
+      const result = await callLanguageModel(config, messages, llmFetch, request?.answerSignal);
+      request?.ensureAnswerActive?.();
       const latencyMs = Date.now() - startedAt;
       if (trackConnection && config === modelConfigStore.config) {
         modelConfigStore.markConnectionSuccess({
@@ -1576,6 +1598,8 @@ export async function buildApp(options = {}) {
       }
       return { ...result, latencyMs };
     } catch (error) {
+      // Superseded requests are not evidence that this model is unhealthy.
+      request?.ensureAnswerActive?.();
       if (request) {
         request.opsDetails = {
           ...request.opsDetails,
@@ -1665,7 +1689,9 @@ export async function buildApp(options = {}) {
   app.decorate('adminAuthStore', adminAuthStore);
   const liveClients = new Map();
   const playbackReports = new Map();
+  const activeAnswerLifecycles = new Set();
   const seenClientEvents = new Set();
+  const pendingClientEvents = new Map();
   const currentPlaybackReports = () => [...playbackReports.values()].filter((entry) =>
     entry.instanceId === liveControlStore.instanceId &&
     entry.commandSequence === liveControlStore.lastCommand?.sequence,
@@ -1679,6 +1705,7 @@ export async function buildApp(options = {}) {
     response.write(`data: ${JSON.stringify(event)}\n\n`);
   };
   const broadcastLiveEvent = (event) => {
+    for (const lifecycle of activeAnswerLifecycles) lifecycle.synchronize();
     for (const response of liveClients.keys()) {
       writeLiveEvent(response, event);
     }
@@ -1697,6 +1724,79 @@ export async function buildApp(options = {}) {
       for (const secret of secrets) value = value.split(secret).join('[REDACTED]');
       return [key, value];
     }));
+  };
+  const withAnswerLifecycle = async (request, reply, answer) => {
+    const controller = new AbortController();
+    const startedInstanceId = liveControlStore.instanceId;
+    const startedSequence = liveControlStore.sequence;
+    const startedAt = Date.now();
+    let cancellationLog = null;
+    const cancel = (reason) => {
+      if (controller.signal.aborted) return;
+      const error = modelProviderError('ANSWER_CANCELLED', '本轮问答已取消。', 409);
+      error.cancellationReason = reason;
+      request.opsDetails = {
+        ...request.opsDetails, answerStatus: 'cancelled', errorCode: error.code,
+        cancellationReason: reason, failureStage: 'cancellation',
+      };
+      cancellationLog = recordOpsSafely({
+        category: 'question', action: 'question.cancelled', outcome: 'rejected',
+        summary: reason === 'CLIENT_DISCONNECTED' ? '访客已断开，取消本轮问答' : '主持控制已变化，取消旧问答',
+        request: { id: String(request.id), route: '/answer' },
+        details: { ...request.opsDetails, turnId: request.turnId,
+          startedInstanceId, startedSequence,
+          currentInstanceId: liveControlStore.instanceId, currentSequence: liveControlStore.sequence,
+          latencyMs: Date.now() - startedAt },
+        dialogue: redactDialogue({ question: request.body.question, answer: '' }, request),
+      });
+      controller.abort(error);
+    };
+    const lifecycle = {
+      synchronize() {
+        if (request.raw.aborted || (reply.raw.destroyed && !reply.raw.writableEnded)) {
+          cancel('CLIENT_DISCONNECTED');
+        } else if (startedInstanceId !== liveControlStore.instanceId ||
+          startedSequence !== liveControlStore.sequence) {
+          cancel('LIVE_CONTROL_CHANGED');
+        }
+      },
+    };
+    const ensureActive = () => {
+      lifecycle.synchronize();
+      controller.signal.throwIfAborted();
+    };
+    const onClose = () => {
+      // IncomingMessage.close also fires after a normally consumed POST body.
+      // Only the unfinished outgoing response identifies a disconnected caller.
+      if (!reply.raw.writableEnded) cancel('CLIENT_DISCONNECTED');
+    };
+    request.answerSignal = controller.signal;
+    request.ensureAnswerActive = ensureActive;
+    reply.raw.on('close', onClose);
+    activeAnswerLifecycles.add(lifecycle);
+    try {
+      ensureActive();
+      const result = await answer(ensureActive);
+      ensureActive();
+      return result;
+    } catch (error) {
+      lifecycle.synchronize();
+      if (!controller.signal.aborted) throw error;
+      await cancellationLog;
+      if (controller.signal.reason.cancellationReason === 'CLIENT_DISCONNECTED') {
+        reply.hijack();
+        return reply;
+      }
+      return reply.code(409).send({
+        error: liveControlStore.mode === 'hosting' ? 'HOSTING_MODE_ACTIVE' : 'ANSWER_CANCELLED',
+        answered: false, answerStatus: 'cancelled', answerStatusSource: 'system',
+        cancellationReason: 'LIVE_CONTROL_CHANGED',
+        answer: '', speechText: '', message: '主持控制已变化，本轮问答已取消。',
+      });
+    } finally {
+      reply.raw.removeListener('close', onClose);
+      activeAnswerLifecycles.delete(lifecycle);
+    }
   };
   app.addHook('preClose', async () => {
     await recordOpsSafely({
@@ -2374,33 +2474,49 @@ export async function buildApp(options = {}) {
       return reply.code(400).send({ error: 'CLIENT_EVENT_INVALID', message: '前台执行记录格式无效。' });
     }
     if (seenClientEvents.has(body.eventId)) return { ok: true, duplicate: true };
+    const pendingWrite = pendingClientEvents.get(body.eventId);
+    if (pendingWrite) {
+      // Concurrent retries share the durable result, including write failures.
+      await pendingWrite;
+      return { ok: true, duplicate: true };
+    }
     const failed = body.phase.endsWith('-failed') || body.phase.endsWith('-unavailable');
     const skipped = body.phase.endsWith('-cancelled') || body.phase.endsWith('-muted');
     const { question, answer, ...details } = body;
-    await opsLogStore.record({
-      category: body.kind === 'hosting' ? 'live' : 'question',
-      action: `client.${body.phase}`,
-      outcome: failed ? 'failure' : skipped ? 'rejected' : 'success',
-      summary: `前台上报：${{
-        'request-started': '开始提问', 'request-failed': '问答请求失败', 'request-cancelled': '问答请求取消',
-        'speech-preparing': '准备语音', 'speech-started': '开始播报', 'speech-completed': '播报完成',
-        'speech-failed': '播报失败', 'speech-cancelled': '播报取消', 'speech-muted': '静音未播报',
-        'speech-unavailable': '语音不可用',
-      }[body.phase]}`,
-      details: { ...details, reportedBy: 'browser' },
-      ...(question !== undefined || answer !== undefined ? { dialogue: redactDialogue({ question, answer }) } : {}),
-    });
-    seenClientEvents.add(body.eventId);
-    if (seenClientEvents.size > 2_000) seenClientEvents.delete(seenClientEvents.values().next().value);
-    if (body.kind === 'hosting') {
-      playbackReports.set(body.clientId, {
-        clientId: body.clientId, instanceId: body.instanceId,
-        commandSequence: body.commandSequence, phase: body.phase,
-        errorCode: body.errorCode ?? null, receivedAt: new Date().toISOString(),
+    const writeEvent = async () => {
+      await opsLogStore.record({
+        category: body.kind === 'hosting' ? 'live' : 'question',
+        action: `client.${body.phase}`,
+        outcome: failed ? 'failure' : skipped ? 'rejected' : 'success',
+        summary: `前台上报：${{
+          'request-started': '开始提问', 'request-failed': '问答请求失败', 'request-cancelled': '问答请求取消',
+          'speech-preparing': '准备语音', 'speech-started': '开始播报', 'speech-completed': '播报完成',
+          'speech-failed': '播报失败', 'speech-cancelled': '播报取消', 'speech-muted': '静音未播报',
+          'speech-unavailable': '语音不可用',
+        }[body.phase]}`,
+        details: { ...details, reportedBy: 'browser' },
+        ...(question !== undefined || answer !== undefined ? { dialogue: redactDialogue({ question, answer }) } : {}),
       });
-      if (playbackReports.size > 200) playbackReports.delete(playbackReports.keys().next().value);
+      seenClientEvents.add(body.eventId);
+      if (seenClientEvents.size > 2_000) seenClientEvents.delete(seenClientEvents.values().next().value);
+      if (body.kind === 'hosting') {
+        playbackReports.set(body.clientId, {
+          clientId: body.clientId, instanceId: body.instanceId,
+          commandSequence: body.commandSequence, phase: body.phase,
+          errorCode: body.errorCode ?? null, receivedAt: new Date().toISOString(),
+        });
+        if (playbackReports.size > 200) playbackReports.delete(playbackReports.keys().next().value);
+      }
+    };
+    const writing = writeEvent();
+    pendingClientEvents.set(body.eventId, writing);
+    try {
+      await writing;
+      return { ok: true };
+    } finally {
+      // Failed writes must release the event ID so a later delivery can retry.
+      pendingClientEvents.delete(body.eventId);
     }
-    return { ok: true };
   });
 
   app.put(
@@ -2854,7 +2970,7 @@ export async function buildApp(options = {}) {
         },
       },
     },
-    async (request, reply) => {
+    (request, reply) => withAnswerLifecycle(request, reply, async (ensureAnswerActive) => {
       request.opsDetails = {
         mode: liveControlStore.mode,
         questionCharacters: [...request.body.question].length,
@@ -2865,6 +2981,7 @@ export async function buildApp(options = {}) {
         details: { turnId: request.turnId },
         dialogue: redactDialogue({ question: request.body.question, answer: '' }, request),
       });
+      ensureAnswerActive();
       if (liveControlStore.mode === 'hosting') {
         return reply.code(409).send({
           error: 'HOSTING_MODE_ACTIVE',
@@ -2904,7 +3021,9 @@ export async function buildApp(options = {}) {
               timeoutMs: Math.min(5_000, modelConfig.timeoutMs) },
             buildQueryRewriteMessages(request.body.question),
             llmFetch,
+            request.answerSignal,
           );
+          ensureAnswerActive();
           rewrite = { status: result.answerStatus === 'answered' ? 'expanded' : 'unchanged',
             latencyMs: Date.now() - startedAt };
           if (modelConfig === modelConfigStore.config) {
@@ -2928,6 +3047,7 @@ export async function buildApp(options = {}) {
               retrievalMode: context.retrievalMode, contextCount: context.contextIds.length },
           });
         } catch (error) {
+          ensureAnswerActive();
           rewrite = { status: 'failed', latencyMs: Date.now() - startedAt };
           request.opsDetails = { ...request.opsDetails, rewriteErrorCode: error.code,
             rewriteUpstreamStatus: error.upstreamStatus ?? null };
@@ -2945,10 +3065,7 @@ export async function buildApp(options = {}) {
             details: { turnId: request.turnId, ...rewrite, errorCode: error.code,
               upstreamStatus: error.upstreamStatus ?? null, originalContextUsed: usableOriginal },
           });
-          if (liveControlStore.mode === 'hosting') {
-            return reply.code(409).send({ error: 'HOSTING_MODE_ACTIVE', answered: false,
-              answer: HOSTING_MODE_TEXT, speechText: HOSTING_MODE_TEXT, message: HOSTING_MODE_TEXT });
-          }
+          ensureAnswerActive();
           if (!usableOriginal) {
             request.opsDetails = { ...request.opsDetails, rewriteStatus: 'failed',
               rewriteLatencyMs: rewrite.latencyMs, upstreamStatus: error.upstreamStatus ?? null,
@@ -2956,11 +3073,8 @@ export async function buildApp(options = {}) {
             throw error;
           }
         }
-        // Do not start another model call after an operator has taken over.
-        if (liveControlStore.mode === 'hosting') {
-          return reply.code(409).send({ error: 'HOSTING_MODE_ACTIVE', answered: false,
-            answer: HOSTING_MODE_TEXT, speechText: HOSTING_MODE_TEXT, message: HOSTING_MODE_TEXT });
-        }
+        // A mode round trip still invalidates this generation of the question.
+        ensureAnswerActive();
       }
       request.opsDetails = {
         ...request.opsDetails,
@@ -2985,6 +3099,7 @@ export async function buildApp(options = {}) {
         ),
         { request },
       );
+      ensureAnswerActive();
       request.opsDetails = {
         ...request.opsDetails,
         mode: liveControlStore.mode,
@@ -3014,7 +3129,7 @@ export async function buildApp(options = {}) {
           retrievalMode: context.retrievalMode,
         },
       };
-    },
+    }),
   );
 
   app.setErrorHandler((error, request, reply) => {

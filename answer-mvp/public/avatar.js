@@ -43,6 +43,9 @@ const DEFAULT_CONFIG = Object.freeze({
 
 const DEFAULT_COMPOSER_HINT =
   '输入文字或点击麦克风提问 · AI 回答仅供参考';
+const CONTROL_INTERRUPTED_HINT =
+  '控制连接中断，已暂停提问与播报；同步完成后可继续';
+const SPEECH_FAILURE_HINT = '语音未能播放，请阅读屏幕上的回答。';
 
 // Final transport deadline: maximum model budget (120 s), query rewrite (5 s)
 // and 15 s for transport. Keep it independent of cached configuration so a
@@ -95,6 +98,7 @@ const runtime = {
   liveSequence: -1,
   liveEventSource: null,
   liveConnected: false,
+  liveControlInterrupted: false,
   lastHostedScriptTitle: '',
   liveTracker: new LiveStateTracker(),
   hostingCommandSequence: null,
@@ -131,13 +135,17 @@ async function flushClientEvents() {
   runtime.eventsSending = true;
   try {
     while (runtime.eventQueue.length) {
+      const event = runtime.eventQueue[0];
       const response = await fetch('/api/client-events', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(runtime.eventQueue[0]), keepalive: true,
+        body: JSON.stringify(event), keepalive: true,
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok && response.status !== 400) break;
-      runtime.eventQueue.shift();
+      // New reports can evict an in-flight head at the capacity limit. Its
+      // late acknowledgement must not remove a different, unsent event.
+      const acknowledgedIndex = runtime.eventQueue.findIndex(queued => queued.eventId === event.eventId);
+      if (acknowledgedIndex !== -1) runtime.eventQueue.splice(acknowledgedIndex, 1);
       persistClientEvents();
     }
   } catch { /* Keep events in this tab and retry when connectivity returns. */ }
@@ -146,6 +154,11 @@ async function flushClientEvents() {
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function dialogueComposerHint() {
+  return ['speech-failed', 'speech-unavailable'].includes(runtime.flow?.reason)
+    ? SPEECH_FAILURE_HINT : DEFAULT_COMPOSER_HINT;
 }
 
 class BrowserVoiceInput {
@@ -361,7 +374,10 @@ class BrowserVoiceInput {
     const listening = state === 'starting' || state === 'listening';
     const unsupported = state === 'unsupported';
     const disabled = state === 'disabled' || this.externallyDisabled;
-    const label = disabled
+    const controlInterrupted = disabled && runtime.liveControlInterrupted;
+    const label = controlInterrupted
+      ? '控制连接中断，暂停语音输入'
+      : disabled
       ? '主持模式下暂停语音输入'
       : unsupported
       ? '当前浏览器不支持语音输入'
@@ -377,13 +393,13 @@ class BrowserVoiceInput {
     this.button.title = label;
 
     this.hint.textContent =
-      message ||
+      controlInterrupted ? CONTROL_INTERRUPTED_HINT : message ||
       ({
         starting: '正在打开麦克风…',
         listening: '正在聆听，说完后会自动发送；再次点击可提前结束',
         disabled: '主持模式由后台控制播报，现场提问已暂停',
         unsupported: '当前浏览器不支持语音输入，仍可使用文字提问',
-      }[state] ?? DEFAULT_COMPOSER_HINT);
+      }[state] ?? dialogueComposerHint());
 
     if (state === 'error') {
       this.messageTimer = setTimeout(() => this.setState('idle'), 4_500);
@@ -456,30 +472,36 @@ function cancelActiveInteraction(reason = 'live-control-interrupted') {
 
 function updateInteractionAvailability() {
   const hosting = runtime.liveMode === 'hosting';
+  const paused = hosting || runtime.liveControlInterrupted;
   document.body.dataset.liveMode = runtime.liveMode;
   elements.liveModePill.dataset.mode = runtime.liveMode;
   elements.liveModeLabel.textContent = hosting ? '主持模式' : '对话模式';
   elements.hostingBanner.hidden = !hosting;
-  elements.questionForm.setAttribute('aria-disabled', String(hosting));
-  elements.questionInput.disabled = hosting;
-  elements.questionInput.placeholder = hosting
+  elements.questionForm.setAttribute('aria-disabled', String(paused));
+  elements.questionInput.disabled = paused;
+  elements.questionInput.placeholder = runtime.liveControlInterrupted
+    ? '控制连接中断，重连同步后可继续提问'
+    : hosting
     ? '主持模式下，现场提问已暂停'
     : '输入你想问的问题…';
-  elements.sendButton.disabled = hosting || Boolean(runtime.requestController);
-  runtime.voiceInput?.setEnabled(!hosting);
+  elements.sendButton.disabled = paused || Boolean(runtime.requestController);
+  runtime.voiceInput?.setEnabled(!paused);
 
   for (const button of elements.quickQuestions.querySelectorAll('button')) {
-    button.disabled = hosting;
+    button.disabled = paused;
   }
 
-  if (hosting) {
+  if (runtime.liveControlInterrupted) {
+    elements.conversationTitle.textContent = '正在恢复控制连接';
+    elements.composerHint.textContent = CONTROL_INTERRUPTED_HINT;
+  } else if (hosting) {
     elements.conversationTitle.textContent = '主持模式已开启';
     elements.composerHint.textContent =
       '主持模式由后台控制播报，现场提问已暂停';
   } else {
     elements.conversationTitle.textContent = '有什么想了解的？';
     if (!runtime.voiceInput?.active) {
-      elements.composerHint.textContent = DEFAULT_COMPOSER_HINT;
+      elements.composerHint.textContent = dialogueComposerHint();
     }
   }
 }
@@ -575,7 +597,15 @@ function handleLiveEvent(messageEvent) {
 
   const accepted = applyRemoteLiveState(event);
   if (!accepted) return;
-  if (event.type === 'sync') { void refreshHealth(); return; }
+  if (event.type === 'sync') {
+    // Opening the transport is not enough: a fresh accepted snapshot tells us
+    // whether a hosting takeover happened while this client was disconnected.
+    runtime.liveControlInterrupted = false;
+    updateInteractionAvailability();
+    if (runtime.flow) updateStateUI(runtime.flow.state, runtime.flow.reason);
+    void refreshHealth();
+    return;
+  }
   if (accepted.duplicate) return;
 
   if (event.type === 'mode') {
@@ -620,20 +650,28 @@ function connectLiveEvents() {
   const eventSource = new EventSource('/api/live/events');
   runtime.liveEventSource = eventSource;
   for (const type of ['sync', 'mode', 'present', 'stop']) {
-    eventSource.addEventListener(type, handleLiveEvent);
+    eventSource.addEventListener(type, (event) => {
+      if (runtime.liveEventSource === eventSource) handleLiveEvent(event);
+    });
   }
   eventSource.addEventListener('open', () => {
+    if (runtime.liveEventSource !== eventSource) return;
     runtime.liveConnected = true;
     void refreshHealth();
   });
   eventSource.addEventListener('error', () => {
+    if (runtime.liveEventSource !== eventSource) return;
     runtime.liveConnected = false;
+    runtime.liveControlInterrupted = true;
+    // A missed command may have taken over from dialogue to hosting. Stop any
+    // old interaction, not only speech that was already known to be hosting.
+    cancelActiveInteraction('live-connection-lost');
     if (runtime.liveMode === 'hosting' && runtime.hostingCommandSequence !== null) {
-      cancelActiveInteraction('live-connection-lost');
       runtime.hostingCommandSequence = null;
       elements.hostingScriptTitle.textContent = '控制连接中断，已暂停播报';
       elements.hostingScriptPreview.textContent = '重连后请由后台重新下发，旧主持词不会自动重播。';
     }
+    updateInteractionAvailability();
     setServiceStatus('offline', '实时控制正在重新连接');
   });
 }
@@ -650,7 +688,9 @@ async function refreshHealth() {
     // Health responses must never advance the control sequence ahead of an SSE
     // present event (otherwise the actual command could be mistaken for a duplicate).
     if (!('EventSource' in window) && health.liveControl?.mode) applyRemoteLiveState(health.liveControl);
-    if (runtime.liveMode === 'hosting') {
+    if (runtime.liveControlInterrupted) {
+      setServiceStatus('offline', '实时控制正在重新连接');
+    } else if (runtime.liveMode === 'hosting') {
       setServiceStatus(
         'online',
         runtime.liveConnected
@@ -679,13 +719,16 @@ async function refreshHealth() {
       }
     }
   } catch {
-    setServiceStatus('offline', '内容服务不可用');
+    setServiceStatus('offline', runtime.liveControlInterrupted ? '实时控制正在重新连接' : '内容服务不可用');
   }
 }
 
 function updateStateUI(state, reason = runtime.flow?.reason) {
   const stateConfig = runtime.config.states[state] ?? DEFAULT_CONFIG.states[state];
-  if (runtime.liveMode === 'hosting' && state === 'idle') {
+  if (runtime.liveControlInterrupted && state === 'idle') {
+    elements.stateLabel.textContent = '控制连接中断';
+    elements.stateHint.textContent = '提问与播报已暂停，正在重新同步';
+  } else if (runtime.liveMode === 'hosting' && state === 'idle') {
     elements.stateLabel.textContent = '主持模式';
     elements.stateHint.textContent = '等待后台下一条播报指令';
   } else if (runtime.liveMode === 'hosting' && state === 'presenting') {
@@ -820,7 +863,7 @@ function finishSpeechSequence(speechSequence, outcome = 'completed', errorCode) 
     elements.hostingScriptPreview.textContent = outcome === 'completed'
       ? '等待后台选择下一段主持词。' : '请检查声音开关或浏览器语音，再由后台重新播报。';
   } else if (outcome === 'failed' || outcome === 'unavailable') {
-    elements.composerHint.textContent = '语音未能播放，请阅读屏幕上的回答。';
+    updateInteractionAvailability();
   }
   return finished;
 }
@@ -1023,6 +1066,12 @@ async function requestAnswer(question, signal, turnId) {
     if (!response.ok) {
       const error = new Error(payload.message || `请求失败（${response.status}）`);
       error.code = payload.error;
+      if (response.status === 409 && payload.answerStatus === 'cancelled' &&
+          payload.answered === false && payload.cancellationReason === 'LIVE_CONTROL_CHANGED' &&
+          ['HOSTING_MODE_ACTIVE', 'ANSWER_CANCELLED'].includes(payload.error)) {
+        error.name = 'AbortError';
+        throw error;
+      }
       error.fallbackText = typeof payload.answer === 'string'
         ? payload.answer.trim()
         : '';
@@ -1052,7 +1101,8 @@ async function requestAnswer(question, signal, turnId) {
 }
 
 async function askQuestion(question) {
-  if (runtime.liveMode !== 'dialogue') {
+  if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
+    updateInteractionAvailability();
     return;
   }
   runtime.requestController?.abort();
@@ -1070,7 +1120,7 @@ async function askQuestion(question) {
   const pendingMessage = appendMessage('assistant', '正在调用大语言模型生成回答…', {
     pending: true,
   });
-  elements.sendButton.disabled = true;
+  updateInteractionAvailability();
 
   try {
     const result = await requestAnswer(question, controller.signal, context.turnId);
@@ -1092,6 +1142,7 @@ async function askQuestion(question) {
     if (error.name === 'AbortError') {
       reportClientEvent(context, 'request-cancelled');
       pendingMessage.remove();
+      if (runtime.requestController === controller) runtime.flow.reset('question-cancelled');
       return;
     }
 
@@ -1131,7 +1182,7 @@ async function askQuestion(question) {
     pendingMessage.remove();
     if (runtime.requestController === controller) {
       runtime.requestController = null;
-      elements.sendButton.disabled = runtime.liveMode !== 'dialogue';
+      updateInteractionAvailability();
     }
   }
 }
@@ -1153,7 +1204,7 @@ function previewState(state) {
 }
 
 function prepareForVoiceInput() {
-  if (runtime.liveMode !== 'dialogue') {
+  if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
     return;
   }
   runtime.requestController?.abort();
@@ -1174,7 +1225,8 @@ function syncViewport() {
 function bindEvents() {
   elements.questionForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (runtime.liveMode !== 'dialogue') {
+    if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
+      updateInteractionAvailability();
       return;
     }
     runtime.voiceInput?.abort();

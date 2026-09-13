@@ -285,7 +285,7 @@ Tests cover administration sessions, full dialogue logs/redaction, upstream 401/
 
 Use `npm run test:review` as the strict review gate: known-finding assertions run as ordinary failures instead of TODOs. TODOs in `npm test` are not passes. See the [expanded test and review report](TEST_REVIEW_20260912.en.md) and [testing guide](TESTING.md).
 
-The five findings were fixed on 2026-09-13 with their regressions retained: 174/174 pass, zero TODOs. See the [fix and verification report](FIX_REVIEW_20260913.en.md).
+The latest fixes on 2026-09-13 pass 227/227 tests with zero TODOs, covering bounded management recovery, partial log writes, stale queue acknowledgments, speech-failure hints, and test cleanup ordering. See the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
 
 ## Docker
 
