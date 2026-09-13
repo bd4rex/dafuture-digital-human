@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 4 ]]; then
+usage() {
   echo "用法: $0 idle.mp4 thinking.mp4 speaking.mp4 presenting.mp4" >&2
+  echo "或: $0 --state idle|thinking|speaking|presenting source.mp4" >&2
+}
+
+states=(idle thinking speaking presenting)
+inputs=("$@")
+if [[ "$#" -eq 3 && "$1" == --state ]]; then
+  case "$2" in
+    idle|thinking|speaking|presenting) states=("$2"); inputs=("$3") ;;
+    *) usage; exit 2 ;;
+  esac
+elif [[ "$#" -ne 4 ]]; then
+  usage
   exit 2
 fi
 for tool in ffmpeg ffprobe; do
   command -v "$tool" >/dev/null 2>&1 || { echo "需要先安装 $tool。" >&2; exit 1; }
 done
-for input in "$@"; do
+for input in "${inputs[@]}"; do
   [[ -f "$input" ]] || { echo "找不到母版: $input" >&2; exit 1; }
 done
 
@@ -42,19 +54,23 @@ encode() {
     "${STAGING_DIR}/${state}-poster.jpg"
 }
 
-encode idle "$1"
-encode thinking "$2"
-encode speaking "$3" "${SPEAKING_START:-0}" "${SPEAKING_DURATION:-}"
-encode presenting "$4" "${PRESENTING_START:-0}" "${PRESENTING_DURATION:-}"
+for index in "${!states[@]}"; do
+  state="${states[$index]}"
+  case "$state" in
+    speaking) encode "$state" "${inputs[$index]}" "${SPEAKING_START:-0}" "${SPEAKING_DURATION:-}" ;;
+    presenting) encode "$state" "${inputs[$index]}" "${PRESENTING_START:-0}" "${PRESENTING_DURATION:-}" ;;
+    *) encode "$state" "${inputs[$index]}" ;;
+  esac
+done
 
-for state in idle thinking speaking presenting; do
+for state in "${states[@]}"; do
   codec="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "${STAGING_DIR}/${state}.mp4")"
   audio="$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "${STAGING_DIR}/${state}.mp4")"
   dimensions="$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "${STAGING_DIR}/${state}.mp4")"
   [[ "$codec" == h264 && -z "$audio" && "$dimensions" == 720x960 ]] || { echo "$state 编码或画幅验证失败。" >&2; exit 1; }
 done
-for state in idle thinking speaking presenting; do
+for state in "${states[@]}"; do
   install -m 0644 "${STAGING_DIR}/${state}.mp4" "${OUTPUT_DIR}/${state}.mp4"
   install -m 0644 "${STAGING_DIR}/${state}-poster.jpg" "${OUTPUT_DIR}/${state}-poster.jpg"
+  du -h "${OUTPUT_DIR}/${state}.mp4" "${OUTPUT_DIR}/${state}-poster.jpg"
 done
-du -h "${OUTPUT_DIR}"/{idle,thinking,speaking,presenting}.mp4 "${OUTPUT_DIR}"/*-poster.jpg

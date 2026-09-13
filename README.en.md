@@ -60,7 +60,7 @@ See [knowledge scope, provenance, and maintenance](answer-mvp/bundled-knowledge/
 - Maintain multiple hosting scripts and broadcast one exact script to every connected frontend from the Hosting tab.
 - Diagnose sign-in, knowledge-file, model, hosting-control, and Q&A actions through the operations-log viewer.
 - Present interactions with four video states: `idle`, `thinking`, `speaking`, and `presenting`.
-- New background-embedded MP4s total about 1.88 MB with real-person posters and tap-to-retry. Mobile keeps the composer on screen and adapts to transcript scrolling, the keyboard, and landscape. Pose diagnostics remain at `/avatar?preview=1`; WeChat still needs physical-device acceptance.
+- Background-embedded MP4s total about 2.03 MB, with a separate presenting clip supplied on September 13, 2026, real-person posters, and tap-to-retry. Mobile keeps the composer on screen and adapts to transcript scrolling, the keyboard, and landscape. Pose diagnostics remain at `/avatar?preview=1`; WeChat still needs physical-device acceptance.
 - Allow first-time setup, sign-in, and all authenticated administration APIs from any page origin while retaining server-verified passwords, HttpOnly sessions, and optional Bearer access for automation.
 - Activate candidate model connections only after validation succeeds while retaining read compatibility for existing `content.json` data and APIs.
 - Sanitize upstream model errors and replace technical details with speech-ready service fallback copy, without exposing API keys or upstream details.

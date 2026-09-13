@@ -68,11 +68,11 @@
       "hint": "正在进行开场介绍",
       "sources": [
         {
-          "src": "/avatar-media/presenting.mp4?v=background-v2-aligned-20260908",
+          "src": "/avatar-media/presenting.mp4?v=hosting-v3-aligned-20260913",
           "type": "video/mp4"
         }
       ],
-      "poster": "/avatar-media/presenting-poster.jpg?v=background-v2-aligned-20260908"
+      "poster": "/avatar-media/presenting-poster.jpg?v=hosting-v3-aligned-20260913"
     }
   },
   "mediaStyle": "background"
