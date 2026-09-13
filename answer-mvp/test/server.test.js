@@ -763,8 +763,10 @@ test('微信兼容 MP4、真人海报与播放器模块可访问，支持 HEAD /
   assert.equal(script.statusCode, 200);
   assert.match(script.headers['content-type'], /javascript/);
   assert.match(script.body, /export class AvatarVideoSwitcher/);
+  const config = (await app.inject({ method: 'GET', url: '/avatar-config.json' })).json();
   for (const state of ['idle', 'thinking', 'speaking', 'presenting']) {
-    const url = `/avatar-media/${state}.mp4?v=background-v2-aligned-20260908`;
+    const url = config.states[state].sources[0].src;
+    assert.ok(url.startsWith(`/avatar-media/${state}.mp4?v=`));
     const head = await app.inject({ method: 'HEAD', url });
     assert.equal(head.statusCode, 200);
     assert.equal(head.headers['content-type'], 'video/mp4');
@@ -778,7 +780,7 @@ test('微信兼容 MP4、真人海报与播放器模块可访问，支持 HEAD /
     assert.equal(partial.rawPayload.subarray(4, 8).toString(), 'ftyp');
     const invalid = await app.inject({ method: 'GET', url, headers: { range: 'bytes=99999999-' } });
     assert.equal(invalid.statusCode, 416);
-    const poster = await app.inject({ method: 'GET', url: `/avatar-media/${state}-poster.jpg` });
+    const poster = await app.inject({ method: 'GET', url: config.states[state].poster });
     assert.equal(poster.statusCode, 200);
     assert.equal(poster.headers['content-type'], 'image/jpeg');
     assert.equal(poster.rawPayload.readUInt16BE(0), 0xffd8);
@@ -786,6 +788,24 @@ test('微信兼容 MP4、真人海报与播放器模块可访问，支持 HEAD /
   for (const filename of ['config.json', 'unknown.mp4', 'idle.jpg', 'idle-poster.mp4', 'private-poster.jpg']) {
     assert.equal((await app.inject({ method: 'GET', url: `/avatar-media/${filename}` })).statusCode, 404);
   }
+});
+
+test('主持素材独立于对话片段，视频和海报使用同一非空缓存版本', async (t) => {
+  const { app } = await createTestApp(t);
+  const { states } = (await app.inject({ method: 'GET', url: '/avatar-config.json' })).json();
+  const videoUrl = new URL(states.presenting.sources[0].src, 'http://localhost');
+  const posterUrl = new URL(states.presenting.poster, 'http://localhost');
+  assert.ok(videoUrl.searchParams.get('v'));
+  assert.equal(videoUrl.searchParams.get('v'), posterUrl.searchParams.get('v'));
+  const [presenting, speaking, presentingPoster, speakingPoster] = await Promise.all([
+    states.presenting.sources[0].src, states.speaking.sources[0].src,
+    states.presenting.poster, states.speaking.poster,
+  ].map((url) => app.inject({ method: 'GET', url })));
+  for (const response of [presenting, speaking, presentingPoster, speakingPoster]) {
+    assert.equal(response.statusCode, 200);
+  }
+  assert.equal(presenting.rawPayload.equals(speaking.rawPayload), false);
+  assert.equal(presentingPoster.rawPayload.equals(speakingPoster.rawPayload), false);
 });
 
 test('已登录内容接口返回可编辑内容和版本号', async (t) => {

@@ -124,7 +124,7 @@ See [bundled knowledge documentation](bundled-knowledge/README.en.md) for proven
 
 ## Digital-Human Frontend
 
-The frontend uses four background-embedded H.264 MP4 clips at 720×960, 30 fps, without audio, totaling about 1.88 MB. Phones initially load idle and its real-person poster (about 0.61 MB). Normal networks prepare speaking during thinking; data-saving networks load only the active pose.
+The frontend uses four background-embedded H.264 MP4 clips at 720×960, 30 fps, without audio, totaling about 2.03 MB. Presenting now uses a separate five-second clip supplied on September 13, 2026 (about 0.55 MB), instead of sharing the speaking motion. Phones initially load idle and its real-person poster (about 0.61 MB). Normal networks prepare speaking during thinking; data-saving networks load only the active pose.
 
 ```text
 Dialogue: question -> thinking -> model answer (still thinking) -> audio starts -> speaking -> idle
@@ -285,7 +285,7 @@ Tests cover administration sessions, full dialogue logs/redaction, upstream 401/
 
 Use `npm run test:review` as the strict review gate: known-finding assertions run as ordinary failures instead of TODOs. TODOs in `npm test` are not passes. See the [expanded test and review report](TEST_REVIEW_20260912.en.md) and [testing guide](TESTING.md).
 
-The latest fixes on 2026-09-13 pass 227/227 tests with zero TODOs, covering bounded management recovery, partial log writes, stale queue acknowledgments, speech-failure hints, and test cleanup ordering. See the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
+After the September 13, 2026 presenting-asset update, ordinary and strict suites both pass 228/228 tests with zero TODOs, adding independent hosting-media and matching poster-cache checks. The prior 227 tests cover bounded management recovery, partial log writes, stale queue acknowledgments, speech-failure hints, and test cleanup ordering; see the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
 
 ## Docker
 
