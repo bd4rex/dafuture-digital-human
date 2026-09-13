@@ -312,3 +312,9 @@
 - Release preparation: publish the new presenting asset to GitHub and merge `main` as requested. Target: `https://github.com/bd4rex/dafuture-digital-human`; starting point: matching local / remote `6ae609d`; branch: `codex/update-presenting-video-20260913`. No open PR was found.
 - Checks: ordinary and strict pre-publication suites both pass 228/228, with zero failures, cancellations, skips, or TODOs. Production dependency audit reports zero known vulnerabilities. Builder / test syntax and diff-format checks pass. All 54 relative links across eight bilingual documents resolve, and four paired heading structures match.
 - Scope and boundary: commit only presenting video / poster, their cache configuration, the single-state builder, regression tests, and bilingual documentation. The other three poses, model settings, admin credentials, runtime knowledge, hosting scripts, logs, and screenshots are excluded from this change. No hosted deployment operations; physical-device WeChat acceptance remains separate.
+
+## 2026-09-13 21:33 +0800
+
+- Release completed: feature commit `8c46ccdf27b676419243440128fe9b411ef984cf` was merged into GitHub `main` through [PR #5](https://github.com/bd4rex/dafuture-digital-human/pull/5) as `eaa9f9da07bc5b6e5ace1ed99ceed43405fd806c`. GitHub confirms the merge, and local main was fast-forwarded successfully.
+- Post-merge validation: the strict suite again passes 228/228, with zero failures, cancellations, skips, or TODOs. The new presenting video, poster, and cache configuration are on main. Pre-publication scanning of all 13 staged files detected no common tokens, private keys, credential-bearing URLs, local user paths, or excluded runtime data.
+- Handoff boundary: this updates GitHub without hosted deployment operations. The local preview service remains running. Real model / TTS, microphone, and physical-device WeChat acceptance were not repeated in this release turn.
