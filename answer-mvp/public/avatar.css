@@ -848,11 +848,16 @@ body[data-live-mode="hosting"] .conversation-panel {
   font-size: 9px;
 }
 
-.preview-panel button:hover,
+.preview-panel button:not(:disabled):hover,
 .preview-panel button.active {
   border-color: var(--line-strong);
   color: var(--mint);
   background: var(--mint-soft);
+}
+
+.preview-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .noscript-note {

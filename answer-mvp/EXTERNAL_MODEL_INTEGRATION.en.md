@@ -12,7 +12,7 @@ Code baseline: `8741f252538153bbe2e03544b8e48ac289623bad`; `package.json` declar
 
 - Implemented: administration of an LLM connection, with text answers generated through an OpenAI-compatible chat endpoint.
 - Not implemented: server-side external ASR, external TTS, pre-generated hosting audio, persistent audio storage, or audio caching.
-- Current speech: browser recognition and synthesis. Replacement entry points exist, but only `browser` providers are implemented.
+- Current speech: browser recognition and synthesis. Replacement entry points exist, but only `browser` providers are implemented. Since September 15, 2026, the approved male voice is pinned for the page; unavailability retains text instead of using an unknown voice.
 - Recommended sequence: TTS → pre-generated hosting audio and preview → ASR → streaming speech or semantic retrieval if measurements justify them.
 - Not needed initially: real-time lip sync, full-duplex assistants, a vector database, a GPU inference cluster, or new microservices.
 - Operator experience: configure and test everything in the existing web workbench. Visitors never configure keys.
@@ -273,7 +273,7 @@ Add `speechProviders.server` and `voiceInputProviders.server`. Reuse the existin
 
 Current `/answer` supports request-disconnect and control-generation cancellation. If an in-flight turn returns HTTP 409 with `answerStatus: "cancelled"`, `cancellationReason: "LIVE_CONTROL_CHANGED"`, and empty `answer/speechText`, external frontends must discard it instead of synthesizing an empty-answer fallback. The error is `HOSTING_MODE_ACTIVE` or `ANSWER_CANCELLED`. Control loss pauses old interactions; valid synchronization permits new questions. See the [cancellation contract and verification](FIX_REVIEW_20260913_R2.en.md). The audio/ASR cleanup requirements below also apply to future adapters; they do not mean an external speech provider is already integrated.
 
-- Preserve cancellation semantics for a new question, hosting command, stop, mode switch, mute, and control disconnect.
+- Preserve explicit cancellation for hosting commands, operator stop, mode switches, mute, and control disconnects. Since September 15, 2026, a new visitor question cannot interrupt the current answer: drafting remains available during generation, audio preparation, and playback, but sending requires completion and explicit user action. Future adapters must retain the `canStartQuestion` entry guard and control-recovery paths.
 - In addition to `speechSynthesis.cancel()`, abort the current audio request, stop `<audio>`, clear playback queues, and release Blob URLs. Stop microphone tracks when ASR is cancelled.
 - Reject late results using `speechSequence`, `requestSequence`, and hosting `instanceId + commandSequence`. Even when upstream computation cannot be stopped, obsolete audio must never play.
 - Separate cloud synthesis timeout from browser playback-start timeout. Do not apply the existing browser-speech eight-second start watchdog to the entire cloud synthesis operation.
@@ -291,7 +291,7 @@ Current `/answer` supports request-disconnect and control-generation cancellatio
 
 ## 10. Speech input and natural fallbacks
 
-Initially support one recording followed by recognition, not continuous listening, wake words, echo cancellation, or simultaneous speech and interruption. Stop current playback when the microphone starts. Submit final recognized text through the existing path and retain keyboard input.
+Initially support one recording followed by recognition, not continuous listening, wake words, echo cancellation, or simultaneous speech and interruption. Disable and guard microphone startup until the current answer ends; recording must not stop ongoing playback. Then allow explicit recording, submit final recognized text through the existing path, and retain keyboard input. Late results from cancelled or older recordings must not overwrite drafts or submit a new question.
 
 Allocate `turnId` when recording begins and reuse it for ASR, `/answer`, TTS, and playback logs. Currently `askQuestion` allocates its own ID; allow an existing one to be supplied. Generating a new ID at each stage breaks correlation.
 
@@ -304,7 +304,7 @@ Recommended fallback behavior:
 | ASR failure or silence | No LLM call; invite another recording or keyboard input |
 | LLM lacks evidence | Preserve configured knowledge-gap copy and synthesize it normally |
 | LLM/network failure | Use natural service-error copy, never technical errors |
-| TTS fails with a valid answer | Keep text; optionally try browser speech, then clearly report playback failure |
+| TTS fails with a valid answer | Keep text; try browser speech only if the approved male voice is available and satisfies the voice policy, otherwise explain without switching to female or unknown voices |
 | Frontend cannot reach the server | Use fallback audio already cached by the page; otherwise retain text and explain honestly |
 | Hosting audio is corrupt/unavailable | Report failure and await operator retry; never rewrite or substitute the script |
 

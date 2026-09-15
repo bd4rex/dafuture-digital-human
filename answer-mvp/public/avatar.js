@@ -46,6 +46,8 @@ const DEFAULT_COMPOSER_HINT =
 const CONTROL_INTERRUPTED_HINT =
   '控制连接中断，已暂停提问与播报；同步完成后可继续';
 const SPEECH_FAILURE_HINT = '语音未能播放，请阅读屏幕上的回答。';
+const MALE_VOICE_UNAVAILABLE_HINT = '当前设备的指定男声不可用，已保留文字回答；不会自动切换其他声音。';
+const VOICE_READY_TIMEOUT_MS = 1_500;
 
 // Final transport deadline: maximum model budget (120 s), query rewrite (5 s)
 // and 15 s for transport. Keep it independent of cached configuration so a
@@ -104,6 +106,11 @@ const runtime = {
   hostingCommandSequence: null,
   speechContext: null,
   speechStartTimer: null,
+  speechEndTimer: null,
+  voiceReadyTimer: null,
+  pendingSpeechStart: null,
+  speechErrorCode: '',
+  composingQuestion: false,
   clientId: createClientId(),
   eventQueue: [],
   eventsSending: false,
@@ -157,8 +164,25 @@ function wait(milliseconds) {
 }
 
 function dialogueComposerHint() {
+  if (interactionBusy()) {
+    if (runtime.flow?.reason === 'audio-preparing') return '正在准备语音，可先输入下一题，播报结束后再发送';
+    if (runtime.flow?.state === 'speaking') return '正在播报，可先输入下一题，播报结束后再发送';
+    return '正在生成回答，可先输入下一题，当前回答结束后再发送';
+  }
+  if (runtime.flow?.reason === 'speech-unavailable' && runtime.speechErrorCode === 'MALE_VOICE_UNAVAILABLE') {
+    return MALE_VOICE_UNAVAILABLE_HINT;
+  }
   return ['speech-failed', 'speech-unavailable'].includes(runtime.flow?.reason)
     ? SPEECH_FAILURE_HINT : DEFAULT_COMPOSER_HINT;
+}
+
+function interactionBusy() {
+  return Boolean(runtime.requestController || runtime.activeSpeechSequence !== null ||
+    (runtime.flow && runtime.flow.state !== 'idle' && runtime.flow.reason !== 'manual-preview'));
+}
+
+function canStartQuestion() {
+  return runtime.liveMode === 'dialogue' && !runtime.liveControlInterrupted && !interactionBusy();
 }
 
 class BrowserVoiceInput {
@@ -180,19 +204,28 @@ class BrowserVoiceInput {
     this.errorMessage = '';
     this.messageTimer = null;
     this.externallyDisabled = false;
+    this.sessionSequence = 0;
 
     if (!this.Recognition) {
       this.setState('unsupported');
       return;
     }
 
-    this.recognition = new this.Recognition();
-    this.recognition.onstart = () => this.handleStart();
-    this.recognition.onresult = (event) => this.handleResult(event);
-    this.recognition.onerror = (event) => this.handleError(event);
-    this.recognition.onend = () => this.handleEnd();
     this.configure(config);
+    this.createRecognition();
     this.setState('idle');
+  }
+
+  createRecognition() {
+    const recognition = new this.Recognition();
+    const sessionSequence = this.sessionSequence;
+    this.recognition = recognition;
+    const current = () => this.recognition === recognition && this.sessionSequence === sessionSequence;
+    recognition.onstart = () => { if (current()) this.handleStart(); };
+    recognition.onresult = event => { if (current()) this.handleResult(event); };
+    recognition.onerror = event => { if (current()) this.handleError(event); };
+    recognition.onend = () => { if (current()) this.handleEnd(); };
+    this.configure(this.config);
   }
 
   configure(config) {
@@ -218,6 +251,7 @@ class BrowserVoiceInput {
   }
 
   start() {
+    if (this.active) return;
     if (this.externallyDisabled) {
       this.setState('disabled');
       return;
@@ -226,17 +260,21 @@ class BrowserVoiceInput {
       this.setState('unsupported');
       return;
     }
+    if (this.onBeforeStart?.() === false) return;
 
     clearTimeout(this.messageTimer);
+    this.sessionSequence += 1;
     this.cancelled = false;
     this.pendingSubmit = false;
     this.errorMessage = '';
     this.baseText = this.input.value.trim();
     this.active = true;
-    this.onBeforeStart?.();
     this.setState('starting');
 
     try {
+      // A fresh recognizer identifies the recording session. Late events from
+      // an aborted session must not be mistaken for the next recording.
+      this.createRecognition();
       this.recognition.start();
     } catch {
       this.active = false;
@@ -261,6 +299,7 @@ class BrowserVoiceInput {
   }
 
   abort() {
+    this.sessionSequence += 1;
     this.pendingSubmit = false;
     this.cancelled = true;
     if (this.recognition && this.active) {
@@ -283,20 +322,19 @@ class BrowserVoiceInput {
     if (nextDisabled) {
       this.abort();
     } else {
-      this.cancelled = false;
       this.setState(this.recognition ? 'idle' : 'unsupported');
     }
   }
 
   handleStart() {
-    if (this.externallyDisabled) {
+    if (this.externallyDisabled || this.cancelled || !this.active) {
       this.active = false;
       try {
         this.recognition?.abort();
       } catch {
         // The recognizer may already be ending after the mode switch.
       }
-      this.setState('disabled');
+      this.setState(this.externallyDisabled ? 'disabled' : 'idle');
       return;
     }
     this.active = true;
@@ -304,6 +342,7 @@ class BrowserVoiceInput {
   }
 
   handleResult(event) {
+    if (!this.active || this.cancelled || this.externallyDisabled) return;
     const finalSegments = [];
     const interimSegments = [];
     for (let index = 0; index < event.results.length; index += 1) {
@@ -331,7 +370,7 @@ class BrowserVoiceInput {
   }
 
   handleError(event) {
-    if (event.error === 'aborted' && this.cancelled) {
+    if (!this.active || this.cancelled || this.externallyDisabled) {
       return;
     }
 
@@ -365,7 +404,12 @@ class BrowserVoiceInput {
     );
 
     if (shouldSubmit) {
-      setTimeout(() => this.form.requestSubmit(), 0);
+      const sessionSequence = this.sessionSequence;
+      const transcript = this.input.value;
+      setTimeout(() => {
+        if (this.sessionSequence === sessionSequence && !this.externallyDisabled && !this.cancelled &&
+            !this.active && !this.errorMessage && this.input.value === transcript) this.form.requestSubmit();
+      }, 0);
     }
   }
 
@@ -378,7 +422,7 @@ class BrowserVoiceInput {
     const label = controlInterrupted
       ? '控制连接中断，暂停语音输入'
       : disabled
-      ? '主持模式下暂停语音输入'
+      ? runtime.liveMode === 'hosting' ? '主持模式下暂停语音输入' : '当前回答结束后可使用麦克风'
       : unsupported
       ? '当前浏览器不支持语音输入'
       : listening
@@ -397,7 +441,8 @@ class BrowserVoiceInput {
       ({
         starting: '正在打开麦克风…',
         listening: '正在聆听，说完后会自动发送；再次点击可提前结束',
-        disabled: '主持模式由后台控制播报，现场提问已暂停',
+        disabled: runtime.liveMode === 'hosting'
+          ? '主持模式由后台控制播报，现场提问已暂停' : dialogueComposerHint(),
         unsupported: '当前浏览器不支持语音输入，仍可使用文字提问',
       }[state] ?? dialogueComposerHint());
 
@@ -473,22 +518,32 @@ function cancelActiveInteraction(reason = 'live-control-interrupted') {
 function updateInteractionAvailability() {
   const hosting = runtime.liveMode === 'hosting';
   const paused = hosting || runtime.liveControlInterrupted;
+  const busy = interactionBusy();
+  const actionsDisabled = paused || busy;
   document.body.dataset.liveMode = runtime.liveMode;
   elements.liveModePill.dataset.mode = runtime.liveMode;
   elements.liveModeLabel.textContent = hosting ? '主持模式' : '对话模式';
   elements.hostingBanner.hidden = !hosting;
   elements.questionForm.setAttribute('aria-disabled', String(paused));
+  elements.questionForm.setAttribute('aria-busy', String(busy));
   elements.questionInput.disabled = paused;
   elements.questionInput.placeholder = runtime.liveControlInterrupted
     ? '控制连接中断，重连同步后可继续提问'
     : hosting
     ? '主持模式下，现场提问已暂停'
+    : busy
+    ? '可先输入下一题，播报结束后再发送…'
     : '输入你想问的问题…';
-  elements.sendButton.disabled = paused || Boolean(runtime.requestController);
-  runtime.voiceInput?.setEnabled(!paused);
+  elements.sendButton.disabled = actionsDisabled;
+  elements.sendButton.title = paused ? elements.questionInput.placeholder : busy ? '当前回答结束后可发送' : '发送问题';
+  runtime.voiceInput?.setEnabled(!actionsDisabled);
 
   for (const button of elements.quickQuestions.querySelectorAll('button')) {
-    button.disabled = paused;
+    button.disabled = actionsDisabled;
+  }
+  for (const button of elements.previewPanel.querySelectorAll('[data-preview-state]')) {
+    button.disabled = actionsDisabled;
+    button.title = actionsDisabled ? '当前回答或主持结束后可测试姿态' : '测试人物姿态';
   }
 
   if (runtime.liveControlInterrupted) {
@@ -753,6 +808,7 @@ function updateStateUI(state, reason = runtime.flow?.reason) {
   }
 
   runtime.videoSwitcher.show(state);
+  updateInteractionAvailability();
 }
 
 function setMediaNote({ status = 'loading', reason = '', state = 'idle' } = {}) {
@@ -815,8 +871,12 @@ function renderQuickQuestions() {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = question;
-    button.disabled = runtime.liveMode === 'hosting';
+    button.disabled = !canStartQuestion();
     button.addEventListener('click', () => {
+      if (!canStartQuestion()) {
+        updateInteractionAvailability();
+        return;
+      }
       elements.questionInput.value = question;
       resizeComposer();
       elements.questionForm.requestSubmit();
@@ -835,6 +895,9 @@ function resizeComposer() {
 
 function stopSpeech(outcome = 'cancelled') {
   clearTimeout(runtime.speechStartTimer);
+  clearTimeout(runtime.speechEndTimer);
+  clearTimeout(runtime.voiceReadyTimer);
+  runtime.pendingSpeechStart = null;
   if (runtime.speechContext) {
     reportClientEvent(runtime.speechContext, `speech-${outcome}`);
     runtime.speechContext = null;
@@ -847,9 +910,18 @@ function stopSpeech(outcome = 'cancelled') {
 }
 
 function finishSpeechSequence(speechSequence, outcome = 'completed', errorCode) {
+  if (speechSequence !== runtime.flow.speechSequence) return false;
+  runtime.speechErrorCode = errorCode ?? '';
+  if (runtime.activeSpeechSequence === speechSequence) {
+    runtime.activeSpeechSequence = null;
+    runtime.speechUtterance = null;
+  }
+  clearTimeout(runtime.voiceReadyTimer);
+  runtime.pendingSpeechStart = null;
   const finished = runtime.flow.finishSpeech(speechSequence, outcome);
   if (!finished) return false;
   clearTimeout(runtime.speechStartTimer);
+  clearTimeout(runtime.speechEndTimer);
   if (runtime.speechContext?.speechSequence === speechSequence) {
     reportClientEvent(runtime.speechContext, `speech-${outcome}`, {
       durationMs: Math.round(performance.now() - runtime.speechContext.startedAt),
@@ -879,7 +951,9 @@ function normalizedVoiceName(value) {
 }
 
 function preferredChineseVoice() {
-  const voices = window.speechSynthesis?.getVoices?.() ?? [];
+  let voices;
+  try { voices = window.speechSynthesis?.getVoices?.() ?? []; }
+  catch { return null; }
   const chineseVoices = voices.filter((voice) => /^zh(?:[-_]|$)/i.test(voice.lang));
   const mainlandVoices = chineseVoices.filter(
     (voice) => voice.lang.replace('_', '-').toLowerCase() === 'zh-cn',
@@ -894,20 +968,32 @@ function preferredChineseVoice() {
       ? configuredPreferences
       : DEFAULT_CONFIG.speech.preferredVoiceNames;
 
+  // Web Speech exposes no gender field. This is an operator-maintained list
+  // of approved male voice names, never a permission to use an arbitrary voice.
+  const matchesPreference = (voice, preference) => {
+    const name = normalizedVoiceName(voice.name);
+    const desired = normalizedVoiceName(preference).trim();
+    if (!desired) return false;
+    if (/^[a-z0-9]+$/.test(desired)) return name.split(/[^a-z0-9]+/).includes(desired);
+    return name.includes(desired);
+  };
+  const approved = candidates.filter(voice => preferences.some(preference => matchesPreference(voice, preference)));
+  const selected = runtime.preferredSpeechVoice;
+  if (selected) {
+    // Obtain a current browser object, but pin the identity for this page.
+    // A missing voice must not silently become another (possibly female) one.
+    return approved.find(voice => voice.voiceURI === selected.voiceURI &&
+      voice.name === selected.name && voice.lang === selected.lang) ?? null;
+  }
+
   for (const preference of preferences) {
-    const normalizedPreference = normalizedVoiceName(preference);
-    if (!normalizedPreference) {
-      continue;
-    }
-    const matchedVoice = candidates.find((voice) =>
-      normalizedVoiceName(voice.name).includes(normalizedPreference),
-    );
+    const matchedVoice = approved.find(voice => matchesPreference(voice, preference));
     if (matchedVoice) {
       return matchedVoice;
     }
   }
 
-  return candidates.find((voice) => voice.localService) ?? candidates[0] ?? null;
+  return null;
 }
 
 function prepareSpeechVoices() {
@@ -916,7 +1002,9 @@ function prepareSpeechVoices() {
   }
 
   const refreshPreferredVoice = () => {
-    runtime.preferredSpeechVoice = preferredChineseVoice();
+    const voice = preferredChineseVoice();
+    if (voice) runtime.preferredSpeechVoice = voice;
+    runtime.pendingSpeechStart?.();
   };
   refreshPreferredVoice();
   window.speechSynthesis.addEventListener?.(
@@ -951,22 +1039,50 @@ function speakWithBrowser(text, speechSequence) {
     return;
   }
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  const voice = runtime.preferredSpeechVoice ?? preferredChineseVoice();
-  if (voice) {
-    utterance.voice = voice;
+  const beginWhenReady = () => {
+    if (runtime.activeSpeechSequence !== speechSequence) return false;
+    const voice = preferredChineseVoice();
+    if (!voice) return false;
+    clearTimeout(runtime.voiceReadyTimer);
+    runtime.pendingSpeechStart = null;
     runtime.preferredSpeechVoice = voice;
-  }
-  utterance.lang = voice?.lang ?? 'zh-CN';
+    try {
+      enqueueBrowserSpeech(text, speechSequence, voice);
+    } catch {
+      finishSpeechSequence(speechSequence, 'failed', 'SPEECH_EXCEPTION');
+    }
+    return true;
+  };
+  if (beginWhenReady()) return;
+  runtime.pendingSpeechStart = beginWhenReady;
+  runtime.voiceReadyTimer = setTimeout(() => {
+    if (runtime.activeSpeechSequence !== speechSequence || beginWhenReady()) return;
+    finishSpeechSequence(speechSequence, 'unavailable', 'MALE_VOICE_UNAVAILABLE');
+  }, VOICE_READY_TIMEOUT_MS);
+}
+
+function enqueueBrowserSpeech(text, speechSequence, voice) {
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.voice = voice;
+  utterance.lang = voice.lang;
   utterance.rate = speechNumber('rate', DEFAULT_CONFIG.speech.rate, 0.75, 1.25);
   utterance.pitch = speechNumber('pitch', DEFAULT_CONFIG.speech.pitch, 0.8, 1.2);
   utterance.volume = 1;
+  let started = false;
 
   utterance.addEventListener('start', () => {
-    if (runtime.activeSpeechSequence !== speechSequence) {
+    if (runtime.activeSpeechSequence !== speechSequence || started) {
       return;
     }
+    started = true;
     clearTimeout(runtime.speechStartTimer);
+    // Some engines lose end/error events. Give long text a generous budget
+    // while ensuring that a stuck engine cannot lock the composer forever.
+    runtime.speechEndTimer = setTimeout(() => {
+      if (runtime.activeSpeechSequence !== speechSequence) return;
+      finishSpeechSequence(speechSequence, 'failed', 'SPEECH_PLAYBACK_TIMEOUT');
+      window.speechSynthesis.cancel();
+    }, Math.max(60_000, text.length * 1_000 / utterance.rate + 15_000));
     reportClientEvent(runtime.speechContext, 'speech-started');
     startSpeechSequence(speechSequence);
   });
@@ -1011,6 +1127,7 @@ const speechProviders = Object.freeze({
 
 function speakText(text, speechSequence, context) {
   stopSpeech();
+  runtime.speechErrorCode = '';
   runtime.speechContext = { ...context, speechSequence, startedAt: performance.now() };
   reportClientEvent(runtime.speechContext, 'speech-preparing');
   runtime.voiceInput?.abort();
@@ -1101,11 +1218,10 @@ async function requestAnswer(question, signal, turnId) {
 }
 
 async function askQuestion(question) {
-  if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
+  if (!canStartQuestion()) {
     updateInteractionAvailability();
     return;
   }
-  runtime.requestController?.abort();
   stopSpeech();
   clearTimeout(runtime.previewTimer);
 
@@ -1188,12 +1304,13 @@ async function askQuestion(question) {
 }
 
 function previewState(state) {
+  if (!canStartQuestion()) {
+    updateInteractionAvailability();
+    return;
+  }
   runtime.voiceInput?.abort();
-  runtime.requestController?.abort();
-  runtime.requestController = null;
   stopSpeech();
   clearTimeout(runtime.previewTimer);
-  elements.sendButton.disabled = false;
 
   runtime.flow.preview(state);
   if (state !== 'idle') {
@@ -1204,14 +1321,13 @@ function previewState(state) {
 }
 
 function prepareForVoiceInput() {
-  if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
-    return;
+  if (!canStartQuestion()) {
+    updateInteractionAvailability();
+    return false;
   }
-  runtime.requestController?.abort();
-  stopSpeech();
   clearTimeout(runtime.previewTimer);
-  elements.sendButton.disabled = false;
   runtime.flow?.reset('voice-input-started');
+  return true;
 }
 
 function syncViewport() {
@@ -1225,7 +1341,7 @@ function syncViewport() {
 function bindEvents() {
   elements.questionForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (runtime.liveMode !== 'dialogue' || runtime.liveControlInterrupted) {
+    if (!canStartQuestion() || runtime.composingQuestion) {
       updateInteractionAvailability();
       return;
     }
@@ -1242,6 +1358,8 @@ function bindEvents() {
   });
 
   elements.questionInput.addEventListener('input', resizeComposer);
+  elements.questionInput.addEventListener('compositionstart', () => { runtime.composingQuestion = true; });
+  elements.questionInput.addEventListener('compositionend', () => { runtime.composingQuestion = false; });
   elements.questionInput.addEventListener('focus', syncViewport);
   elements.questionInput.addEventListener('blur', () => requestAnimationFrame(syncViewport));
   window.addEventListener('resize', syncViewport);
@@ -1253,7 +1371,8 @@ function bindEvents() {
     else void runtime.videoSwitcher.resume();
   });
   elements.questionInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing &&
+        event.keyCode !== 229 && !runtime.composingQuestion) {
       event.preventDefault();
       elements.questionForm.requestSubmit();
     }
