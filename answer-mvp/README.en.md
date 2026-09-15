@@ -57,12 +57,16 @@ For a local run, the default path is `answer-mvp/model-config.json`. Docker uses
 
 The model settings provide two modes:
 
-- `Use managed content only`: the model may answer only from the files visible in Knowledge Management. When the material is insufficient, the server returns the configured insufficient-knowledge message.
+- `Use managed content only`: business facts must come from the files visible in Knowledge Management. When the material is insufficient, the server returns the configured insufficient-knowledge message.
 - `Allow general knowledge`: the model prioritizes managed content and may supplement it with general knowledge, but must not invent project-specific dates, locations, fees, people, or rules.
 
 In both modes, imported knowledge is model context rather than a final answer returned directly by the API. Legacy `content.json` entries no longer participate implicitly.
 
-Normal answers follow the configured Answer Style. The model reports whether a reliable answer exists; when it returns `no_answer`, the server discards model-authored refusal copy and uses the administrator's insufficient-knowledge message. If the model is unconfigured, unreachable, times out, or returns an invalid response, the API preserves the relevant HTTP error and code while the avatar displays and speaks the configured service-error message. Technical details remain available only through operations diagnostics.
+Normal answers follow the configured Answer Style. For business questions, a `no_answer` result discards model-authored refusal copy and uses the administrator's insufficient-knowledge message. If the model is unconfigured, unreachable, times out, or returns an invalid response, the API preserves the relevant HTTP error and code while the avatar displays and speaks the configured service-error message. Technical details remain available only through operations diagnostics.
+
+Common pure greetings, thanks, and farewells are not knowledge queries. Whole-utterance recognition routes them to one answer-model call, without knowledge chunks or query rewriting, while preserving the configured role and style. A valid but mistaken `no_answer` uses short courtesy backup text marked `answerStatusSource: "system"`, not fabricated model output. Malformed responses and transport failures retain the existing error path. Logs include `socialIntent`, `modelAnswerStatus`, and `socialFallback`; speech still consumes `speechText`.
+
+A greeting followed by a business question still requires knowledge; greeting keywords never bypass grounding or discard the substantive question. No greeting knowledge file or general-knowledge setting is needed. This is a conservative route for explicit common courtesy phrases, not a general-purpose small-talk classifier.
 
 ## Web Workbench
 
@@ -295,7 +299,7 @@ Tests cover administration sessions, full dialogue logs/redaction, upstream 401/
 
 Use `npm run test:review` as the strict review gate: known-finding assertions run as ordinary failures instead of TODOs. TODOs in `npm test` are not passes. See the [expanded test and review report](TEST_REVIEW_20260912.en.md) and [testing guide](TESTING.md).
 
-After the September 15, 2026 speech-interaction hardening, ordinary and strict suites both pass 243/243 tests with zero TODOs. Fifteen additions to the 228-test baseline cover editable drafts, duplicate submission, IME keys, guarded controls, delayed/missing/pinned male voices, playback recovery, and stale recognition events. Previous media and recovery coverage remains; see the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
+After the September 15, 2026 greeting fix, ordinary and strict suites both pass 261/261 tests with zero TODOs. Seven social-routing groups extend the 254-test speech-playback baseline, covering empty/small/large libraries, mixed business questions, mistaken refusals, failure logs, hosting takeover, and real loopback HTTP. Previous speech/media/recovery coverage remains; see the [testing guide](TESTING.md). The [third-round verification](FIX_REVIEW_20260913_R3.en.md), [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md), and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
 
 ## Docker
 

@@ -113,6 +113,10 @@ X-Conversation-Id: 45a07063-bc3f-47e6-950b-15955a0f5e90
 
 模型原始回答应为 `{"status":"answered","answer":"…"}` 或 `{"status":"no_answer","answer":""}`。项目对外返回 `answer`、`speechText`、`answered`、`answerStatus`、`answerStatusSource`、`turnId`、`requestId` 及检索信息。`no_answer` 使用管理员配置的知识不足话术；服务异常保留非 2xx 状态并返回自然兜底。
 
+2026-09-15 社交例外：后端整句识别明确的纯问候/感谢/告别，使用同一配置的 LLM 生成礼貌回应，不进行知识检索或改写。此时 `knowledgeContext.retrievalMode` 为 `social`，两个 ID 数组为空；不能据此当成知识库故障。有效模型 `no_answer` 可转换为系统礼貌备份，最终 `answerStatus: "answered"`、`answerStatusSource: "system"`；日志仍保存 `modelAnswerStatus: "no_answer"` 和 `socialFallback: true`。混合业务句、模型/传输故障、主持取消不适用该例外。
+
+如果平台（如扣子）维护了自己的 `/answer` 后端，仅更新前端、知识库或 TTS 补丁不会带入此修复。需要定向合并 `server.js` 的 `socialIntentFor`、`buildModelMessages` 和 `/answer` 路由分支及对应日志契约，并保留平台自有模型适配、TTS/ASR；重新部署后按 TESTING 中 TC-SOCIAL-001 验收。本轮只验证本仓库代码，不假设线上平台已同步。
+
 TTS 必须消费服务端已经校验的最终 `speechText`，包括正常回答和系统兜底；不能直接读取供应商原始 JSON、推理内容、工具调用或截断输出。不要为了“降低延迟”跳过完整 JSON 校验而提前播报模型片段。
 
 不同厂商的模型参数兼容程度不同。第一次接某个 LLM 时，确认认证方式、完整 URL、模型 ID、非流式文本响应、输出长度参数和结构化回答能被现有解析器接受。不支持该聊天协议的模型需要服务端适配器，不能只换模型名。
