@@ -8,7 +8,7 @@ import { LiveControlStore } from '../live-control-store.js';
 const source = (await readFile(new URL('../public/avatar.js', import.meta.url), 'utf8'))
   .replace(/^import .*;\n/gm, '').replace(/void start\(\);\s*$/, '');
 
-function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, eventFetch } = {}) {
+function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, eventFetch, audioPlay } = {}) {
   const element = () => ({ textContent: '', value: '', hidden: false, disabled: false, dataset: {}, listeners: {}, attributes: {},
     classList: { add() {}, remove() {}, toggle() {} }, style: {},
     addEventListener(name, handler) { this.listeners[name] = handler; },
@@ -25,6 +25,25 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
   const storage = new Map();
   const connections = [];
   const fetchCalls = [];
+  const audios = [];
+  const audioCalls = [];
+  const objectUrls = new Map();
+  const revokedUrls = [];
+  const documentListeners = {};
+  let nextUrl = 0;
+  class AudioMock {
+    constructor() { this.handlers = {}; this.attributes = {}; this.paused = true; this.duration = 10; this._src = ''; audios.push(this); }
+    get src() { return this._src; }
+    set src(value) { this._src = value; audioCalls.push({ action: 'src', value }); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    removeAttribute(name) { if (name === 'src') this.src = ''; delete this.attributes[name]; }
+    addEventListener(name, handler) { (this.handlers[name] ??= new Set()).add(handler); }
+    removeEventListener(name, handler) { this.handlers[name]?.delete(handler); }
+    emit(name) { if (name === 'playing') this.paused = false; for (const handler of [...(this.handlers[name] ?? [])]) handler(); }
+    pause() { this.paused = true; audioCalls.push({ action: 'pause' }); }
+    load() { audioCalls.push({ action: 'load' }); }
+    play() { audioCalls.push({ action: 'play', value: this.src }); return audioPlay ? audioPlay(this, objectUrls.get(this.src)) : Promise.resolve(); }
+  }
   let nextTimer = 0;
   const clockEpoch = Date.parse('2026-09-12T00:00:00Z');
   class ManualDate extends Date {
@@ -74,6 +93,9 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
   };
   const context = vm.createContext({
     AvatarFlow, AVATAR_STATES, LiveStateTracker, console, AbortController, AbortSignal: signalApi,
+    Audio: AudioMock, Blob,
+    URL: { createObjectURL(blob) { const url = `blob:test-${++nextUrl}`; objectUrls.set(url, blob); return url; },
+      revokeObjectURL(url) { revokedUrls.push(url); objectUrls.delete(url); } },
     SpeechSynthesisUtterance: Utterance,
     setTimeout: scheduleTimer,
     clearTimeout: cancelTimer,
@@ -82,7 +104,7 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
     performance: performanceClock,
     sessionStorage: { setItem(key, value) { storage.set(key, value); }, getItem(key) { return storage.get(key) ?? null; } },
     document: { querySelector: element, querySelectorAll: () => [], createElement: element,
-      addEventListener() {}, documentElement: { style: { setProperty() {} } }, body: { dataset: {}, classList: { toggle() {} } } },
+      addEventListener(name, handler) { documentListeners[name] = handler; }, documentElement: { style: { setProperty() {} } }, body: { dataset: {}, classList: { toggle() {} } } },
     window: browser, EventSource: EventSourceMock,
     fetch: async (url, options) => {
       fetchCalls.push({ url, options });
@@ -127,6 +149,7 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
   };
   const evaluate = (code) => vm.runInContext(code, context);
   return { ...api, events, utterances, spoken, voiceListeners, timerCalls, timers, runTimers, evaluate, storage, connections, fetchCalls, browser,
+    audios, audioCalls, objectUrls, revokedUrls, documentListeners,
     voicesChanged() { for (const handler of [...voiceListeners]) handler(); }, get cancels() { return cancels; } };
 }
 
@@ -1189,4 +1212,256 @@ test('语音设备异常：枚举音色或创建 utterance 抛错都能恢复提
     assert.equal(app.elements.sendButton.disabled, false);
     assert.equal(app.runtime.flow.state, 'idle');
   }
+});
+
+const ttsResponse = () => ({ ok: true, blob: async () => new Blob(['test audio'], { type: 'audio/mpeg' }) });
+const speechFetch = async url => url === '/api/tts' ? ttsResponse() : answerResponse();
+const settlePromises = () => new Promise(setImmediate);
+function enableServerSpeech(app) {
+  app.runtime.config = { ...app.runtime.config, speech: { ...app.runtime.config.speech, provider: 'server' } };
+  return prepareComposer(app);
+}
+
+test('服务端 TTS：解锁失败后仍正常播报；只打字、聚焦、按 Enter 和点击都不能改写音频或换声', async (t) => {
+  const app = fixture(t, speechFetch, { audioPlay: (_audio, blob) => blob.type === 'audio/wav'
+    ? Promise.reject(new Error('prime blocked')) : Promise.resolve() });
+  const previews = enableServerSpeech(app);
+  app.documentListeners.pointerdown();
+  await settlePromises();
+  assert.equal(app.evaluate('serverSpeechAudioUnlocked'), false);
+  await app.askQuestion('第一题');
+  await settlePromises();
+  const audio = app.audios[0];
+  assert.equal(app.runtime.flow.state, 'thinking', 'bytes or play promise alone must not trigger speaking');
+  audio.emit('playing');
+  const originalUrl = audio.src;
+  const callsBeforeInput = app.audioCalls.length;
+  const cancelsBeforeInput = app.cancels;
+  app.elements.questionInput.value = 'a 第二题的草稿';
+  for (let index = 0; index < 3; index++) {
+    app.elements.questionInput.listeners.input();
+    app.elements.questionInput.listeners.focus();
+    app.elements.questionInput.listeners.keydown({ key: 'a' });
+    app.documentListeners.pointerdown();
+    app.elements.questionInput.listeners.keydown({ key: 'Enter', preventDefault() {} });
+    app.elements.voiceInputButton.listeners.click();
+    for (const button of previews) button.listeners.click();
+    app.evaluate('unlockServerSpeechAudio()');
+  }
+  assert.equal(app.documentListeners.keydown, undefined, 'plain global keystrokes must have no audio side effects');
+  assert.equal(audio.src, originalUrl);
+  assert.equal(audio.paused, false);
+  assert.equal(app.audioCalls.length, callsBeforeInput, 'no src, play, pause or load during draft editing');
+  assert.equal(app.cancels, cancelsBeforeInput);
+  assert.equal(app.spoken.length, 0, 'server audio must never switch to browser speech');
+  assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 1);
+  assert.equal(app.fetchCalls.filter(call => call.url === '/api/tts').length, 1);
+  assert.equal(app.elements.questionInput.disabled, false);
+  assert.equal(app.elements.sendButton.disabled, true);
+  audio.emit('playing'); // A buffering/resume event is not a second start.
+  audio.emit('ended');
+  await settlePromises();
+  assert.equal(app.runtime.flow.state, 'idle');
+  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.questionInput.value, 'a 第二题的草稿');
+  assert.equal(app.events.filter(event => event.phase === 'speech-started').length, 1);
+  assert.equal(app.events.filter(event => event.phase === 'speech-completed').length, 1);
+  assert.equal(app.objectUrls.size, 0);
+  app.elements.questionForm.requestSubmit();
+  await settlePromises();
+  assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 2, 'next draft is submitted only by a later deliberate action');
+});
+
+test('服务端 TTS：解锁进行中只启动一次，迟到成功或失败都不能暂停新的正式音频', async (t) => {
+  for (const outcome of ['resolve', 'reject']) {
+    let finishUnlock;
+    const app = fixture(t, speechFetch, { audioPlay: (_audio, blob) => blob.type === 'audio/wav'
+      ? new Promise((resolve, reject) => { finishUnlock = outcome === 'resolve' ? resolve : reject; }) : Promise.resolve() });
+    enableServerSpeech(app);
+    app.documentListeners.pointerdown();
+    app.documentListeners.pointerdown();
+    assert.equal(app.audioCalls.filter(call => call.action === 'play').length, 1);
+    const primer = [...app.objectUrls.values()][0];
+    assert.equal(primer.type, 'audio/wav');
+    assert.equal(primer.size, 1644);
+    await app.askQuestion('第一题');
+    await settlePromises();
+    const audio = app.audios[0];
+    audio.emit('playing');
+    const calls = app.audioCalls.length;
+    const src = audio.src;
+    finishUnlock();
+    await settlePromises();
+    assert.equal(app.audioCalls.length, calls);
+    assert.equal(audio.src, src);
+    assert.equal(audio.paused, false);
+    assert.equal(app.runtime.flow.state, 'speaking');
+    assert.equal(app.spoken.length, 0);
+  }
+});
+
+test('服务端 TTS：解锁超时释放资源，取消后的旧解锁不能清理另一次解锁', async (t) => {
+  const resolvers = [];
+  const app = fixture(t, speechFetch, { manualTimers: true, audioPlay: () => new Promise(resolve => resolvers.push(resolve)) });
+  enableServerSpeech(app);
+  app.documentListeners.pointerdown();
+  await app.runTimers(2_000);
+  assert.equal(app.objectUrls.size, 0);
+  app.documentListeners.pointerdown();
+  const calls = app.audioCalls.length;
+  resolvers[0]();
+  await settlePromises();
+  assert.equal(app.audioCalls.length, calls);
+  assert.equal(app.objectUrls.size, 1);
+  resolvers[1]();
+  await settlePromises();
+  app.documentListeners.pointerdown();
+  assert.equal(app.audioCalls.filter(call => call.action === 'play').length, 2, 'successful unlock is remembered');
+  assert.equal(app.objectUrls.size, 0);
+});
+
+test('服务端 TTS：合成和音频准备期间指针、输入及重复提交不启动解锁', async (t) => {
+  let respond;
+  const app = fixture(t, url => url === '/api/tts' ? new Promise(resolve => { respond = resolve; }) : answerResponse());
+  enableServerSpeech(app);
+  await app.askQuestion('第一题');
+  app.elements.questionInput.value = '第二题草稿';
+  app.documentListeners.pointerdown();
+  app.elements.questionForm.requestSubmit();
+  app.evaluate('unlockServerSpeechAudio()');
+  assert.equal(app.audios.length, 0);
+  assert.equal(app.runtime.flow.reason, 'audio-preparing');
+  respond(ttsResponse());
+  await settlePromises();
+  const calls = app.audioCalls.length;
+  app.documentListeners.pointerdown();
+  assert.equal(app.audioCalls.length, calls);
+  assert.equal(app.elements.questionInput.value, '第二题草稿');
+});
+
+test('服务端 TTS：请求错误、无效音频和自动播放拦截只保留文字，绝不调用浏览器语音', async (t) => {
+  for (const failure of ['http', 'network', 'empty', 'json', 'play']) {
+    const app = fixture(t, async url => {
+      if (url !== '/api/tts') return answerResponse();
+      if (failure === 'network') throw new Error('offline');
+      if (failure === 'http') return { ok: false, status: 503 };
+      if (failure === 'empty' || failure === 'json') return { ok: true, blob: async () => new Blob(
+        failure === 'empty' ? [] : ['{"error":"failed"}'], { type: failure === 'empty' ? 'audio/mpeg' : 'application/json' }) };
+      return ttsResponse();
+    }, { audioPlay: () => Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' })) });
+    enableServerSpeech(app);
+    await app.askQuestion('第一题');
+    await settlePromises();
+    assert.equal(app.runtime.flow.reason, 'speech-failed', failure);
+    assert.equal(app.spoken.length, 0, failure);
+    assert.equal(app.elements.sendButton.disabled, false, failure);
+    assert.equal(app.objectUrls.size, 0, failure);
+    assert.equal(app.events.filter(event => event.phase === 'speech-failed').length, 1, failure);
+    assert.equal(app.events.some(event => event.phase === 'speech-started'), false, failure);
+  }
+});
+
+test('服务端 TTS：正常播报后解码失败、超时或主动静音都释放控件和音频，不换声、不自动提交草稿', async (t) => {
+  for (const outcome of ['error', 'start-timeout', 'end-timeout', 'mute']) {
+    const app = fixture(t, speechFetch, { manualTimers: true });
+    enableServerSpeech(app);
+    const pending = app.askQuestion('第一题');
+    await app.runTimers(520);
+    await pending;
+    const audio = app.audios[0];
+    const latePlaying = [...audio.handlers.playing][0];
+    const lateEnded = [...audio.handlers.ended][0];
+    if (outcome !== 'start-timeout') audio.emit('playing');
+    app.elements.questionInput.value = '第二题草稿';
+    if (outcome === 'error') audio.emit('error');
+    if (outcome === 'start-timeout') await app.runTimers(8_000);
+    if (outcome === 'end-timeout') await app.runTimers(60_000);
+    if (outcome === 'mute') app.elements.soundToggle.listeners.click();
+    latePlaying(); lateEnded();
+    await settlePromises();
+    assert.equal(app.runtime.flow.state, 'idle', outcome);
+    assert.equal(app.elements.sendButton.disabled, false, outcome);
+    assert.equal(app.elements.questionInput.value, '第二题草稿', outcome);
+    assert.equal(audio.paused, true, outcome);
+    assert.equal(audio.src, '', outcome);
+    assert.equal(app.objectUrls.size, 0, outcome);
+    assert.equal(app.spoken.length, 0, outcome);
+    assert.equal(app.events.filter(event => ['speech-failed', 'speech-muted'].includes(event.phase)).length, 1, outcome);
+    assert.equal(app.events.some(event => event.phase === 'speech-completed'), false, outcome);
+    assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 1, outcome);
+  }
+});
+
+test('服务端 TTS：请求头和音频流截止都会中止请求，迟到回包不复活播放', async (t) => {
+  for (const phase of ['headers', 'body']) {
+    let release;
+    let bodyReads = 0;
+    const app = fixture(t, url => {
+      if (url !== '/api/tts') return answerResponse();
+      return phase === 'headers' ? new Promise(resolve => { release = resolve; })
+        : { ok: true, blob: () => new Promise(resolve => { bodyReads++; release = resolve; }) };
+    }, { manualTimers: true });
+    enableServerSpeech(app);
+    const pending = app.askQuestion('第一题');
+    await app.runTimers(520);
+    await pending;
+    const signal = app.fetchCalls.find(call => call.url === '/api/tts').options.signal;
+    await app.runTimers(30_000);
+    assert.equal(signal.aborted, true);
+    assert.equal(app.runtime.speechErrorCode, 'TTS_REQUEST_TIMEOUT');
+    assert.equal(app.elements.sendButton.disabled, false);
+    release(phase === 'headers' ? { ok: true, blob: async () => { bodyReads++; return new Blob(['late'], { type: 'audio/mpeg' }); } }
+      : new Blob(['late'], { type: 'audio/mpeg' }));
+    await settlePromises();
+    assert.equal(bodyReads, phase === 'headers' ? 0 : 1);
+    assert.equal(app.audios.length, 0);
+    assert.equal(app.spoken.length, 0);
+  }
+});
+
+test('服务端 TTS：后台停止后旧请求、旧音频事件和 play 拒绝都不能影响下一轮', async (t) => {
+  let releaseOld;
+  let rejectOldPlay;
+  let requests = 0;
+  const app = fixture(t, url => url !== '/api/tts' ? answerResponse()
+    : ++requests === 1 ? new Promise(resolve => { releaseOld = resolve; }) : ttsResponse(),
+  { audioPlay: () => new Promise((_resolve, reject) => { rejectOldPlay = reject; }) });
+  enableServerSpeech(app);
+  const live = store();
+  app.handleLiveEvent({ data: JSON.stringify(live.present('opening')) });
+  app.handleLiveEvent({ data: JSON.stringify(live.stop()) });
+  assert.equal(app.fetchCalls.find(call => call.url === '/api/tts').options.signal.aborted, true);
+  app.handleLiveEvent({ data: JSON.stringify(live.present('opening')) });
+  await settlePromises();
+  const audio = app.audios[0];
+  const oldEnded = [...audio.handlers.ended][0];
+  const oldPlaying = [...audio.handlers.playing][0];
+  const oldError = [...audio.handlers.error][0];
+  const oldRejection = rejectOldPlay;
+  app.handleLiveEvent({ data: JSON.stringify(live.stop()) });
+  app.handleLiveEvent({ data: JSON.stringify(live.present('opening')) });
+  await settlePromises();
+  audio.emit('playing');
+  const sequence = app.runtime.activeSpeechSequence;
+  const url = audio.src;
+  releaseOld(ttsResponse()); oldEnded(); oldPlaying(); oldError(); oldRejection(new Error('old play rejected'));
+  await settlePromises();
+  assert.equal(app.runtime.activeSpeechSequence, sequence);
+  assert.equal(audio.src, url);
+  assert.equal(audio.paused, false);
+  assert.equal(app.spoken.length, 0);
+  audio.emit('ended');
+  await settlePromises();
+  assert.equal(app.events.filter(event => event.phase === 'speech-completed').length, 1);
+});
+
+test('服务端 TTS：未知 provider 不会暗中使用浏览器默认语音', async (t) => {
+  const app = fixture(t, answerResponse);
+  enableServerSpeech(app);
+  app.runtime.config.speech.provider = 'unknown-provider';
+  await app.askQuestion('第一题');
+  assert.equal(app.spoken.length, 0);
+  assert.equal(app.runtime.flow.reason, 'speech-unavailable');
+  assert.equal(app.runtime.speechErrorCode, 'SPEECH_PROVIDER_UNSUPPORTED');
+  assert.equal(app.elements.sendButton.disabled, false);
 });

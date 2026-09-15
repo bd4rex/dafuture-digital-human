@@ -124,6 +124,8 @@ See [bundled knowledge documentation](bundled-knowledge/README.en.md) for proven
 
 ## Digital-Human Frontend
 
+Distinguish repository defaults from the Coze deployment: defaults remain `browser`, while the frontend now implements `speechProviders.server` against Coze's existing `POST /api/tts`. Keep the platform's built-in TTS/ASR, male voice, and backend configuration. Use the [Coze speech-fix handoff](COZE_SPEECH_FIX.en.md); do not overwrite Coze's `ServerVoiceInput` with the repository's browser-only recognition implementation.
+
 The frontend uses four background-embedded H.264 MP4 clips at 720×960, 30 fps, without audio, totaling about 2.03 MB. Presenting now uses a separate five-second clip supplied on September 13, 2026 (about 0.55 MB), instead of sharing the speaking motion. Phones initially load idle and its real-person poster (about 0.61 MB). Normal networks prepare speaking during thinking; data-saving networks load only the active pose.
 
 ```text
@@ -148,6 +150,8 @@ In addition to typing, visitors can click the microphone beside the composer and
 
 ### External Speech Provider Boundary
 
+September 15, 2026 update: the `server` player now implements bounded synthesis, Blob playback, `playing`-driven poses, and sequence-scoped cleanup. Only an idle user gesture may prime audio, with one in-flight attempt; late callbacks cannot alter real playback. There is no global keyboard unlock or automatic browser-voice fallback. CSP adds only `blob:` to `media-src`, not `data:` audio. No platform speech backend is added to this repository and default configuration is unchanged.
+
 For an executable AI handoff with the current code map, proposed API contracts, and acceptance checklist, see [External Model Integration and AI Developer Handoff](EXTERNAL_MODEL_INTEGRATION.en.md). The proposed server-side speech endpoints are not implemented yet.
 
 Both `speech.provider` and `speechInput.provider` in `public/avatar-config.json` currently use `browser`. Playback and recognition are separated behind provider entry points so a future external model can retain these boundaries:
@@ -156,7 +160,7 @@ Both `speech.provider` and `speechInput.provider` in `public/avatar-config.json`
 - A TTS provider converts `speechText` into playable audio and drives the existing avatar state machine through start, end, and cancellation events.
 - Third-party API keys remain server-side; the browser calls this project's speech proxy and never holds provider credentials. This does not require restoring the removed administration-origin restrictions.
 - Browser recognition may use a vendor-operated remote service and must not be assumed to run locally. Choose and configure production ASR according to privacy requirements before handling sensitive student or visitor information.
-- Browser fallback is allowed only when the approved male voice is available and meets the voice policy; otherwise retain text without silently switching voices. Identical voice-and-text output can be cached by hash to reduce latency and provider cost.
+- Selecting server TTS disables automatic browser-voice fallback: failures, timeouts and blocked playback retain text and restore input. The browser provider remains an explicit selection. Identical voice-and-text output can be cached by hash to reduce latency and provider cost.
 
 Preview all four states manually:
 

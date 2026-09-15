@@ -6,13 +6,15 @@ Document version: 1.0. Verified against source on September 10, 2026.
 
 Code baseline: `8741f252538153bbe2e03544b8e48ac289623bad`; `package.json` declares version `0.8.0`.
 
+September 15, 2026 playback update: the repository now includes frontend `speechProviders.server`, using Coze's existing `POST /api/tts` (`{text}` to binary `audio/*`). It does not add that backend or server ASR. Coze already integrates platform-provided TTS/ASR; preserve those integrations instead of rebuilding them or replacing their endpoints with the historical proposals below. See the [Coze speech-fix handoff](COZE_SPEECH_FIX.en.md). Vendor backends, persistence and pre-generation endpoints below remain proposals.
+
 > This is an integration design and implementation handoff, not a claim that external speech is implemented. APIs, files, settings, and behaviors marked “proposed” require development. Copying an endpoint or model name into configuration does not implement an integration. No real account permissions, keys, billing allowances, or hosted deployment were verified.
 
 ## 1. One-minute summary
 
 - Implemented: administration of an LLM connection, with text answers generated through an OpenAI-compatible chat endpoint.
 - Not implemented: server-side external ASR, external TTS, pre-generated hosting audio, persistent audio storage, or audio caching.
-- Current speech: browser recognition and synthesis. Replacement entry points exist, but only `browser` providers are implemented. Since September 15, 2026, the approved male voice is pinned for the page; unavailability retains text instead of using an unknown voice.
+- Current speech: repository defaults use browser recognition/synthesis, with an additional `server` playback implementation. Coze retains its built-in TTS/ASR. Browser mode pins an approved male voice; server failures retain text without switching to browser speech.
 - Recommended sequence: TTS → pre-generated hosting audio and preview → ASR → streaming speech or semantic retrieval if measurements justify them.
 - Not needed initially: real-time lip sync, full-duplex assistants, a vector database, a GPU inference cluster, or new microservices.
 - Operator experience: configure and test everything in the existing web workbench. Visitors never configure keys.
@@ -260,14 +262,16 @@ synthesize({ text, voice, rate, format, signal, requestId });
 
 ## 9. Playback, cancellation, and deterministic hosting
 
-Add `speechProviders.server` and `voiceInputProviders.server`. Reuse the existing entry points rather than building another chat state machine.
+Frontend `speechProviders.server` is implemented. Server-side recognition and platform backends remain deployment integrations; preserve Coze's existing implementation. Reuse entry points rather than building another chat state machine.
 
 ### Dialogue audio
 
 1. Preserve `askQuestion` → `answerReady`; an available answer remains in `thinking/audio-preparing`.
-2. Request TTS with the same `turnId`, then prepare a Blob URL or controlled audio reference.
+2. The general backend proposal uses `turnId`; the current Coze adapter preserves the existing `/api/tts` and `{text}` contract, then creates a Blob URL. This playback fix does not rewrite the platform backend.
 3. Only `<audio>` `playing` may call `startSpeechSequence`. Text receipt, audio bytes, and `canplay` are not audible playback.
 4. Only `ended` means normal completion. A rejected `play()`, decoding failure, timeout, or network error must become failure or a user-action-required state, never completion. Browsers can reject script-initiated playback; retain a click-to-play control. [Playback rules](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/play)
+5. Global keyboard handlers must not rewrite `<audio>.src`. Idle-gesture priming uses Blob silence, checks idle state and single-attempt ownership, and invalidates ownership before cancellation. Late promises must not pause or clear newer audio. Real `playing` also marks the persistent element unlocked.
+6. Server TTS failures retain text, report failure and restore controls, without calling `speakWithBrowser` before, during or after playback. An approved male-voice list is not permission to switch engines mid-answer.
 
 ### Cancellation across the complete pipeline
 
