@@ -113,6 +113,10 @@ X-Conversation-Id: 45a07063-bc3f-47e6-950b-15955a0f5e90
 
 The expected raw model output is `{"status":"answered","answer":"…"}` or `{"status":"no_answer","answer":""}`. The project response includes `answer`, `speechText`, `answered`, `answerStatus`, `answerStatusSource`, `turnId`, `requestId`, and retrieval metadata. `no_answer` uses the configured knowledge-gap copy. Service failures retain non-2xx status and supply natural fallback text.
 
+September 15, 2026 social exception: the backend recognizes complete, explicit greeting/thanks/farewell utterances and uses the same configured LLM without retrieval or rewriting. `knowledgeContext.retrievalMode` is `social`, with both ID arrays empty; this is not a knowledge failure. A valid model `no_answer` may become a system courtesy backup with final `answerStatus: "answered"` and `answerStatusSource: "system"`; logs preserve `modelAnswerStatus: "no_answer"` and `socialFallback: true`. Mixed business questions, provider/transport errors, and hosting cancellations retain their existing behavior.
+
+If a platform such as Coze maintains its own `/answer` backend, changing frontend assets, knowledge files, or the TTS patch alone does not apply this fix. Port `socialIntentFor`, `buildModelMessages`, and the `/answer` branch/logging contract from `server.js`, retaining platform-specific model/TTS/ASR adapters. Redeploy and run TC-SOCIAL-001 in TESTING. This round verifies repository code only, not live-platform synchronization.
+
 TTS must consume the final server-validated `speechText`, including normal answers and system fallbacks. Never read raw provider JSON, reasoning, tool calls, or truncated output. Do not bypass complete JSON validation and start speaking unvalidated model chunks merely to reduce latency.
 
 LLM parameter compatibility varies. For a new provider, verify authentication, full URL, model ID, non-streaming text responses, output-length parameters, and acceptance by the existing parser. Models without this chat protocol need a server adapter, not just a different model name.
