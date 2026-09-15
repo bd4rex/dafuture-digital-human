@@ -893,7 +893,95 @@ function resizeComposer() {
   )}px`;
 }
 
+// BEGIN SERVER SPEECH LIFECYCLE (also used by the Coze frontend patch).
+let serverSpeechAudio = null;
+let serverSpeechAudioUnlocked = false;
+let serverSpeechUnlockAttempt = null;
+let serverSpeechPlayback = null;
+
+function getServerSpeechAudio() {
+  if (!serverSpeechAudio) {
+    serverSpeechAudio = new Audio();
+    serverSpeechAudio.preload = 'auto';
+    serverSpeechAudio.setAttribute('playsinline', '');
+  }
+  return serverSpeechAudio;
+}
+
+function resetServerSpeechAudio(audio) {
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+}
+
+function clearServerSpeechUnlock(unlocked = false) {
+  const attempt = serverSpeechUnlockAttempt;
+  if (!attempt) return;
+  // Invalidate ownership before pause/load can reject an earlier play promise.
+  serverSpeechUnlockAttempt = null;
+  clearTimeout(attempt.timer);
+  if (unlocked) serverSpeechAudioUnlocked = true;
+  resetServerSpeechAudio(attempt.audio);
+  URL.revokeObjectURL(attempt.url);
+}
+
+function silentSpeechBlob() {
+  // 50 ms of PCM silence. Use a Blob, not data:, under media-src 'self' blob:.
+  const samples = 800;
+  const buffer = new ArrayBuffer(44 + samples * 2);
+  const view = new DataView(buffer);
+  const write = (offset, text) => {
+    for (let index = 0; index < text.length; index++) view.setUint8(offset + index, text.charCodeAt(index));
+  };
+  write(0, 'RIFF'); view.setUint32(4, buffer.byteLength - 8, true);
+  write(8, 'WAVE'); write(12, 'fmt '); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 16_000, true); view.setUint32(28, 32_000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  write(36, 'data'); view.setUint32(40, samples * 2, true);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function unlockServerSpeechAudio() {
+  // A user gesture may prime the persistent element ONLY while idle. Never
+  // let focus, typing, synthesis or a second gesture replace a real clip.
+  if (runtime.config.speech?.provider !== 'server' || !runtime.soundEnabled ||
+      interactionBusy() || serverSpeechPlayback || serverSpeechAudioUnlocked || serverSpeechUnlockAttempt) return;
+  try {
+    const audio = getServerSpeechAudio();
+    const attempt = { audio, url: URL.createObjectURL(silentSpeechBlob()), timer: null };
+    serverSpeechUnlockAttempt = attempt;
+    const settle = (success) => {
+      // A late unlock result must not pause/load a newer real speech session.
+      if (serverSpeechUnlockAttempt === attempt) clearServerSpeechUnlock(success);
+    };
+    attempt.timer = setTimeout(() => settle(false), 2_000);
+    audio.volume = 1;
+    audio.src = attempt.url;
+    Promise.resolve(audio.play()).then(() => settle(true), () => settle(false));
+  } catch {
+    clearServerSpeechUnlock();
+  }
+}
+
+function clearServerSpeechPlayback() {
+  clearServerSpeechUnlock();
+  const playback = serverSpeechPlayback;
+  if (!playback) return;
+  serverSpeechPlayback = null;
+  clearTimeout(playback.requestTimer);
+  playback.controller.abort();
+  if (playback.audio) {
+    for (const [name, handler] of Object.entries(playback.handlers)) {
+      playback.audio.removeEventListener(name, handler);
+    }
+    resetServerSpeechAudio(playback.audio);
+  }
+  if (playback.url) URL.revokeObjectURL(playback.url);
+}
+
 function stopSpeech(outcome = 'cancelled') {
+  clearServerSpeechPlayback();
   clearTimeout(runtime.speechStartTimer);
   clearTimeout(runtime.speechEndTimer);
   clearTimeout(runtime.voiceReadyTimer);
@@ -911,6 +999,7 @@ function stopSpeech(outcome = 'cancelled') {
 
 function finishSpeechSequence(speechSequence, outcome = 'completed', errorCode) {
   if (speechSequence !== runtime.flow.speechSequence) return false;
+  if (serverSpeechPlayback?.speechSequence === speechSequence) clearServerSpeechPlayback();
   runtime.speechErrorCode = errorCode ?? '';
   if (runtime.activeSpeechSequence === speechSequence) {
     runtime.activeSpeechSequence = null;
@@ -945,6 +1034,7 @@ function startSpeechSequence(speechSequence) {
   // not when answer text or synthesized bytes merely become available.
   return runtime.flow.startSpeech(speechSequence);
 }
+// END SERVER SPEECH LIFECYCLE
 
 function normalizedVoiceName(value) {
   return String(value ?? '').normalize('NFKC').toLowerCase();
@@ -1121,8 +1211,70 @@ function enqueueBrowserSpeech(text, speechSequence, voice) {
   }
 }
 
+// BEGIN SERVER SPEECH PROVIDER
+async function speakWithServer(text, speechSequence) {
+  runtime.activeSpeechSequence = speechSequence;
+  if (!runtime.soundEnabled) {
+    finishSpeechSequence(speechSequence, 'muted');
+    return;
+  }
+
+  const playback = {
+    speechSequence, controller: new AbortController(), requestTimer: null,
+    audio: null, url: '', handlers: {}, started: false,
+  };
+  serverSpeechPlayback = playback;
+  const current = () => serverSpeechPlayback === playback && runtime.activeSpeechSequence === speechSequence;
+  // Stay with the configured provider. In particular, NEVER replay the answer
+  // in a different browser voice after a server clip fails or is interrupted.
+  const fail = (code) => { if (current()) finishSpeechSequence(speechSequence, 'failed', code); };
+  // Covers response headers AND body. Cleanup/timeout also releases the UI if
+  // a transport ignores abort or returns a late response from an older turn.
+  playback.requestTimer = setTimeout(() => fail('TTS_REQUEST_TIMEOUT'), 30_000);
+  try {
+    const response = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { Accept: 'audio/*', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }), signal: playback.controller.signal,
+    });
+    if (!current()) return;
+    if (!response.ok) { fail('TTS_REQUEST_FAILED'); return; }
+    const blob = await response.blob();
+    if (!current()) return;
+    if (!blob.size || !/^audio\//i.test(blob.type)) { fail('TTS_INVALID_AUDIO'); return; }
+    clearTimeout(playback.requestTimer);
+    clearServerSpeechUnlock();
+    const audio = getServerSpeechAudio();
+    playback.audio = audio;
+    playback.url = URL.createObjectURL(blob);
+    playback.handlers = {
+      playing: () => {
+        if (!current() || playback.started) return;
+        playback.started = true;
+        serverSpeechAudioUnlocked = true;
+        clearTimeout(runtime.speechStartTimer);
+        const durationMs = Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration * 1_000 : text.length * 1_000;
+        runtime.speechEndTimer = setTimeout(() => fail('SPEECH_PLAYBACK_TIMEOUT'), Math.max(60_000, durationMs + 15_000));
+        reportClientEvent(runtime.speechContext, 'speech-started');
+        startSpeechSequence(speechSequence);
+      },
+      ended: () => { if (current() && playback.started) finishSpeechSequence(speechSequence); },
+      error: () => fail('SPEECH_AUDIO_ERROR'),
+    };
+    for (const [name, handler] of Object.entries(playback.handlers)) audio.addEventListener(name, handler);
+    audio.volume = 1;
+    audio.src = playback.url;
+    runtime.speechStartTimer = setTimeout(() => fail('SPEECH_START_TIMEOUT'), 8_000);
+    await audio.play();
+  } catch (error) {
+    fail(error?.name === 'NotAllowedError' ? 'SPEECH_AUTOPLAY_BLOCKED' : 'TTS_PLAYBACK_FAILED');
+  }
+}
+
 const speechProviders = Object.freeze({
   browser: speakWithBrowser,
+  server: speakWithServer,
 });
 
 function speakText(text, speechSequence, context) {
@@ -1133,9 +1285,14 @@ function speakText(text, speechSequence, context) {
   runtime.voiceInput?.abort();
   const providerName =
     runtime.config.speech?.provider ?? DEFAULT_CONFIG.speech.provider;
-  const provider = speechProviders[providerName] ?? speechProviders.browser;
+  const provider = speechProviders[providerName];
+  if (!provider) {
+    finishSpeechSequence(speechSequence, 'unavailable', 'SPEECH_PROVIDER_UNSUPPORTED');
+    return;
+  }
   provider(text, speechSequence);
 }
+// END SERVER SPEECH PROVIDER
 
 async function requestAnswer(question, signal, turnId) {
   const controller = new AbortController();
@@ -1352,6 +1509,8 @@ function bindEvents() {
       return;
     }
 
+    // Keyboard submission is a deliberate gesture too; ordinary typing is not.
+    unlockServerSpeechAudio();
     elements.questionInput.value = '';
     resizeComposer();
     void askQuestion(question);
@@ -1398,6 +1557,8 @@ function bindEvents() {
       finishSpeechSequence(activeSequence, 'muted');
       stopSpeech('muted');
     }
+    if (!runtime.soundEnabled) clearServerSpeechUnlock();
+    else unlockServerSpeechAudio();
   });
 
   for (const button of elements.previewPanel.querySelectorAll(
@@ -1413,6 +1574,10 @@ function bindEvents() {
     runtime.videoSwitcher.dispose();
     stopSpeech();
   });
+
+  // No global keydown audio handler. Pointer gestures are guarded by idle and
+  // exclusive ownership checks, including while an earlier play is pending.
+  document.addEventListener('pointerdown', unlockServerSpeechAudio);
 }
 
 async function start() {

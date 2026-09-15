@@ -2091,7 +2091,7 @@ export async function buildApp(options = {}) {
     reply
       .header(
         'Content-Security-Policy',
-        "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; media-src 'self'; object-src 'none'",
+        "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'",
       )
       .header('Cache-Control', 'no-store')
       .type('text/html; charset=utf-8')

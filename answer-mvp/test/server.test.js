@@ -269,7 +269,8 @@ test('数字人前台和四态配置可直接访问', async (t) => {
 
   assert.equal(pageResponse.statusCode, 200);
   assert.match(pageResponse.headers['content-type'], /text\/html/);
-  assert.match(pageResponse.headers['content-security-policy'], /media-src 'self'/);
+  assert.match(pageResponse.headers['content-security-policy'], /media-src 'self' blob:;/);
+  assert.doesNotMatch(pageResponse.headers['content-security-policy'], /media-src[^;]*(?:data:|\*)/);
   assert.match(pageResponse.body, /id="live-mode-pill"/);
   assert.match(pageResponse.body, /后台主持控制已接管/);
   assert.doesNotMatch(pageResponse.body, /主持开场/);
