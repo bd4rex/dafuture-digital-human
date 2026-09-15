@@ -9,13 +9,15 @@ const source = (await readFile(new URL('../public/avatar.js', import.meta.url), 
   .replace(/^import .*;\n/gm, '').replace(/void start\(\);\s*$/, '');
 
 function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, eventFetch } = {}) {
-  const element = () => ({ textContent: '', hidden: false, disabled: false, dataset: {}, listeners: {},
+  const element = () => ({ textContent: '', value: '', hidden: false, disabled: false, dataset: {}, listeners: {}, attributes: {},
     classList: { add() {}, remove() {}, toggle() {} }, style: {},
     addEventListener(name, handler) { this.listeners[name] = handler; },
-    setAttribute() {}, querySelectorAll() { return []; }, append() {}, remove() { this.removed = true; }, scrollTo() {},
+    setAttribute(name, value) { this.attributes[name] = value; }, focus() {}, querySelectorAll() { return []; }, append() {}, remove() { this.removed = true; }, scrollTo() {},
   });
   const events = [];
   const utterances = [];
+  const spoken = [];
+  const voiceListeners = new Set();
   let cancels = 0;
   let now = 0;
   const timerCalls = [];
@@ -61,7 +63,12 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
     },
   } : AbortSignal;
   const browser = {
-    EventSource: EventSourceMock, speechSynthesis: { cancel() { cancels++; }, speak() {}, getVoices: () => [] }, SpeechSynthesisUtterance: Utterance,
+    EventSource: EventSourceMock, speechSynthesis: {
+      cancel() { cancels++; }, speak(utterance) { spoken.push(utterance); },
+      getVoices: () => [{ name: 'Microsoft Kangkang', voiceURI: 'kangkang', lang: 'zh-CN', localService: true }],
+      addEventListener(name, handler) { if (name === 'voiceschanged') voiceListeners.add(handler); },
+      removeEventListener(name, handler) { if (name === 'voiceschanged') voiceListeners.delete(handler); },
+    }, SpeechSynthesisUtterance: Utterance,
     setTimeout: scheduleTimer, clearTimeout: cancelTimer, performance: performanceClock,
     Date: dateClock, AbortController, AbortSignal: signalApi, addEventListener() {}, innerHeight: 800,
   };
@@ -87,9 +94,9 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
       throw new Error('offline');
     },
   });
-  vm.runInContext(source + '\nglobalThis.api = {runtime,elements,handleLiveEvent,refreshHealth,speakText,askQuestion,stopSpeech,connectLiveEvents,loadLiveState,flushClientEvents,reportClientEvent,bindEvents};', context);
+  vm.runInContext(source + '\nglobalThis.api = {runtime,elements,handleLiveEvent,refreshHealth,speakText,askQuestion,stopSpeech,connectLiveEvents,loadLiveState,flushClientEvents,reportClientEvent,bindEvents,updateStateUI};', context);
   const api = context.api;
-  api.runtime.flow = new AvatarFlow();
+  api.runtime.flow = new AvatarFlow(({ state, reason }) => api.updateStateUI(state, reason));
   api.runtime.videoSwitcher = { show() {} };
   t.after(() => { api.runtime.requestController?.abort(); api.stopSpeech(); });
   const runTimers = async (ms) => {
@@ -119,7 +126,8 @@ function fixture(t, fetchOverride, { clockStep = 600, manualTimers = false, even
     }
   };
   const evaluate = (code) => vm.runInContext(code, context);
-  return { ...api, events, utterances, timerCalls, timers, runTimers, evaluate, storage, connections, fetchCalls, browser, get cancels() { return cancels; } };
+  return { ...api, events, utterances, spoken, voiceListeners, timerCalls, timers, runTimers, evaluate, storage, connections, fetchCalls, browser,
+    voicesChanged() { for (const handler of [...voiceListeners]) handler(); }, get cancels() { return cancels; } };
 }
 
 function store() {
@@ -428,6 +436,9 @@ test('实际 SSE 回调：初次连接尚未报错和不支持 SSE 的轮询兼�
     app.connectLiveEvents();
     await app.askQuestion('网络暂时不可用时怎么办？');
     assert.equal(app.utterances[0].text, app.runtime.config.serviceErrorText);
+    assert.equal(app.elements.sendButton.disabled, true);
+    app.utterances[0].handlers.start();
+    app.utterances[0].handlers.end();
     assert.equal(app.elements.sendButton.disabled, false);
     assert.equal(app.fetchCalls.filter((call) => call.url === '/answer').length, 1);
   }
@@ -735,7 +746,7 @@ test('REVIEW-AVATAR-001：140 秒前不提前超时，到期记录完整失败�
   await pending;
   assert.equal(app.utterances[0].text, app.runtime.config.serviceErrorText);
   assert.equal(app.runtime.requestController, null);
-  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.sendButton.disabled, true, 'fallback speech must finish before sending');
   const failures = app.events.filter((entry) => entry.phase === 'request-failed');
   assert.equal(failures.length, 1);
   assert.equal(failures[0].errorCode, 'CLIENT_REQUEST_TIMEOUT');
@@ -745,10 +756,16 @@ test('REVIEW-AVATAR-001：140 秒前不提前超时，到期记录完整失败�
   assert.equal(failures[0].turnId, app.fetchCalls.find((call) => call.url === '/answer').options.headers['X-Conversation-Id']);
   assert.equal([...app.timers.values()].some((timer) => timer.due === 140_000), false);
 
+  app.utterances[0].handlers.start();
+  app.utterances[0].handlers.end();
+  assert.equal(app.elements.sendButton.disabled, false);
   const next = app.askQuestion('现在可以回答了吗？');
   await app.runTimers(520);
   await next;
   assert.equal(app.utterances.at(-1).text, '恢复连接后的正常回答。');
+  assert.equal(app.elements.sendButton.disabled, true);
+  app.utterances.at(-1).handlers.start();
+  app.utterances.at(-1).handlers.end();
   assert.equal(app.elements.sendButton.disabled, false);
   assert.equal([...app.timers.values()].some((timer) => timer.due === 280_000), false);
   await app.runTimers(180_000);
@@ -783,7 +800,7 @@ test('REVIEW-AVATAR-001：忽略 abort 的晚到响应头或正文都不能复�
     assert.equal(app.utterances.length, 1);
     assert.equal(app.utterances[0].text, app.runtime.config.serviceErrorText);
     assert.equal(messages[1].removed, true);
-    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.elements.sendButton.disabled, true, 'fallback audio is still preparing');
     const result = { answer: '不应重新播报的迟到答案。' };
     let lateBodyReads = 0;
     release(phase === 'headers' ? { ok: true, json: async () => { lateBodyReads += 1; return result; } } : result);
@@ -814,7 +831,7 @@ test('REVIEW-AVATAR-001：主持接管取消悬挂请求，不产生超时兜底
   assert.equal(app.events.some((entry) => entry.phase === 'request-failed'), false);
 });
 
-test('REVIEW-AVATAR-001：新问题取消旧请求后，旧取消或截止时间不影响新回答', async (t) => {
+test('REVIEW-AVATAR-001：明确取消旧请求后，旧取消或截止时间不影响新回答', async (t) => {
   let releaseOld;
   let calls = 0;
   const app = fixture(t, async () => {
@@ -824,15 +841,352 @@ test('REVIEW-AVATAR-001：新问题取消旧请求后，旧取消或截止时间
   }, { manualTimers: true });
   const old = app.askQuestion('过时的问题。');
   await app.runTimers(1_000);
+  app.evaluate("cancelActiveInteraction('explicit-cancellation')");
   const next = app.askQuestion('请回答这个新问题。');
   await app.runTimers(520);
   await Promise.all([old, next]);
   assert.equal(app.utterances.length, 1);
   assert.equal(app.utterances[0].text, '只播报这条新回答。');
-  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.sendButton.disabled, true, 'answer audio is still preparing');
   releaseOld({ ok: true, json: async () => ({ answer: '旧问题的迟到回答。' }) });
   await app.runTimers(180_000);
   assert.equal(app.utterances.length, 1);
   assert.equal(app.events.filter((entry) => entry.phase === 'request-cancelled').length, 1);
   assert.equal(app.events.some((entry) => entry.phase === 'request-failed'), false);
+});
+
+function prepareComposer(app) {
+  app.browser.SpeechRecognition = class {
+    start() { this.starts = (this.starts ?? 0) + 1; }
+    stop() {}
+    abort() {}
+  };
+  app.evaluate(`runtime.voiceInput = new BrowserVoiceInput({
+    button: elements.voiceInputButton, input: elements.questionInput,
+    form: elements.questionForm, hint: elements.composerHint,
+    onBeforeStart: prepareForVoiceInput, onTranscript: resizeComposer,
+  });`);
+  const previewButtons = AVATAR_STATES.map(state => ({ dataset: { previewState: state }, disabled: false,
+    classList: { toggle() {} }, listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; } }));
+  app.elements.previewPanel.querySelectorAll = () => previewButtons;
+  app.bindEvents();
+  app.elements.questionForm.requestSubmit = () => app.elements.questionForm.listeners.submit({ preventDefault() {} });
+  return previewButtons;
+}
+
+const answerResponse = async () => ({ ok: true, json: async () => ({ answer: '第一题的回答继续播报。' }) });
+
+test('播报交互：生成、准备语音和播放期间均可编辑草稿，但不能重复提交或覆盖当前轮次', async (t) => {
+  let release;
+  const app = fixture(t, () => new Promise(resolve => { release = resolve; }));
+  const previews = prepareComposer(app);
+  const pending = app.askQuestion('第一题');
+  const controller = app.runtime.requestController;
+  const sequence = app.runtime.flow.requestSequence;
+  const cancellations = app.cancels;
+  for (const phase of ['request', 'preparing', 'playing']) {
+    if (phase === 'preparing') { release(await answerResponse()); await pending; }
+    if (phase === 'playing') app.utterances[0].handlers.start();
+    app.elements.questionInput.value = `预备第二题 ${phase}`;
+    app.elements.questionInput.listeners.input();
+    app.elements.questionInput.listeners.focus();
+    assert.equal(app.elements.questionInput.disabled, false);
+    assert.equal(app.elements.sendButton.disabled, true);
+    assert.equal(app.elements.voiceInputButton.disabled, true);
+    assert.ok(previews.every(button => button.disabled));
+    app.elements.questionForm.requestSubmit();
+    await app.askQuestion('不能绕过表单重复发送');
+    assert.equal(app.elements.questionInput.value, `预备第二题 ${phase}`);
+    assert.equal(app.runtime.flow.requestSequence, sequence);
+    assert.equal(controller.signal.aborted, false);
+    assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 1);
+  }
+  // speakText itself clears old speech once; incidental input must not add cancels.
+  assert.equal(app.cancels, cancellations + 1);
+  assert.match(app.elements.composerHint.textContent, /正在播报.*输入下一题/);
+  app.utterances[0].handlers.end();
+  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.voiceInputButton.disabled, false);
+  assert.ok(previews.every(button => !button.disabled));
+  assert.equal(app.elements.questionInput.value, '预备第二题 playing');
+});
+
+test('播报交互：麦克风、快捷问题和预览的直接回调也不能中止回答或丢失草稿', async (t) => {
+  const app = fixture(t, answerResponse);
+  const previews = prepareComposer(app);
+  const quickButtons = [];
+  app.runtime.config = { ...app.runtime.config, quickQuestions: ['快捷问题'] };
+  app.elements.quickQuestions.replaceChildren = () => { quickButtons.length = 0; };
+  app.elements.quickQuestions.append = button => quickButtons.push(button);
+  app.elements.quickQuestions.querySelectorAll = () => quickButtons;
+  app.evaluate('renderQuickQuestions()');
+  await app.askQuestion('第一题');
+  app.utterances[0].handlers.start();
+  app.elements.questionInput.value = '不要丢失我的草稿';
+  const cancellations = app.cancels;
+  for (const button of previews) button.listeners.click();
+  quickButtons[0].listeners.click();
+  app.elements.voiceInputButton.listeners.click();
+  app.runtime.voiceInput.start();
+  assert.equal(app.evaluate('prepareForVoiceInput()'), false);
+  assert.equal(app.runtime.flow.state, 'speaking');
+  assert.equal(app.cancels, cancellations);
+  assert.equal(app.elements.questionInput.value, '不要丢失我的草稿');
+  assert.equal(app.runtime.voiceInput.recognition.starts, undefined);
+  assert.equal(quickButtons[0].disabled, true);
+  app.utterances[0].handlers.end();
+  previews[3].listeners.click();
+  assert.equal(app.runtime.flow.state, 'presenting', 'preview remains usable when idle');
+  assert.ok(previews.every(button => !button.disabled), 'manual preview must not lock its own controls');
+  previews[0].listeners.click();
+  assert.equal(app.runtime.flow.state, 'idle');
+});
+
+test('输入法：中文组词和旧版 229 确认键不发送，播报中 Enter 保留草稿，结束后才发送', async (t) => {
+  const app = fixture(t, answerResponse);
+  prepareComposer(app);
+  app.elements.questionInput.value = '输入法确认的草稿';
+  const keydown = app.elements.questionInput.listeners.keydown;
+  keydown({ key: 'Enter', isComposing: true, preventDefault() {} });
+  keydown({ key: 'Enter', keyCode: 229, preventDefault() {} });
+  app.elements.questionInput.listeners.compositionstart();
+  keydown({ key: 'Enter', preventDefault() {} });
+  app.elements.questionInput.listeners.compositionend();
+  assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 0);
+  await app.askQuestion('第一题');
+  app.utterances[0].handlers.start();
+  keydown({ key: 'Enter', preventDefault() {} });
+  assert.equal(app.elements.questionInput.value, '输入法确认的草稿');
+  assert.equal(app.utterances.length, 1);
+  app.utterances[0].handlers.end();
+  keydown({ key: 'Enter', preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(app.elements.questionInput.value, '');
+  assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 2);
+});
+
+test('播报交互：错误、启动超时和明确静音都释放发送锁，草稿不被自动提交', async (t) => {
+  for (const outcome of ['error', 'timeout', 'mute']) {
+    const app = fixture(t, answerResponse, { manualTimers: true });
+    prepareComposer(app);
+    const pending = app.askQuestion('第一题');
+    await app.runTimers(520);
+    await pending;
+    app.elements.questionInput.value = '下一题草稿';
+    if (outcome === 'timeout') await app.runTimers(8_000);
+    else if (outcome === 'error') app.utterances[0].handlers.error({ error: 'audio-busy' });
+    else app.elements.soundToggle.listeners.click();
+    assert.equal(app.runtime.flow.state, 'idle');
+    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.elements.voiceInputButton.disabled, false);
+    assert.equal(app.elements.questionInput.value, '下一题草稿');
+    assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 1);
+  }
+});
+
+test('男声：voiceschanged 重排或增加更优先音色，不更换已选的男声', async (t) => {
+  const app = fixture(t, answerResponse);
+  const male = app.browser.speechSynthesis.getVoices()[0];
+  app.evaluate('prepareSpeechVoices()');
+  await app.askQuestion('第一题');
+  app.utterances[0].handlers.start();
+  app.browser.speechSynthesis.getVoices = () => [
+    { name: '婷婷', voiceURI: 'tingting', lang: 'zh-CN', localService: true },
+    { name: 'Reed (中文（中国大陆）)', voiceURI: 'reed', lang: 'zh-CN', localService: true },
+    { ...male },
+  ];
+  app.voicesChanged();
+  assert.equal(app.runtime.preferredSpeechVoice.voiceURI, male.voiceURI);
+  assert.equal(app.utterances[0].voice.voiceURI, male.voiceURI);
+  app.utterances[0].handlers.end();
+  await app.askQuestion('第二题');
+  assert.equal(app.utterances[1].voice.voiceURI, male.voiceURI);
+});
+
+test('播报交互：浏览器丢失结束事件时有界恢复，迟到回调不能误结束下一题', async (t) => {
+  const app = fixture(t, answerResponse, { manualTimers: true });
+  prepareComposer(app);
+  const pending = app.askQuestion('第一题');
+  await app.runTimers(520);
+  await pending;
+  const oldSpeech = app.spoken[0];
+  oldSpeech.handlers.start();
+  app.elements.questionInput.value = '下一题草稿';
+  await app.runTimers(59_999);
+  assert.equal(app.elements.sendButton.disabled, true);
+  await app.runTimers(1);
+  assert.equal(app.elements.sendButton.disabled, false);
+  assert.equal(app.elements.questionInput.value, '下一题草稿');
+  assert.ok(app.events.some(event => event.errorCode === 'SPEECH_PLAYBACK_TIMEOUT'));
+  const next = app.askQuestion('第二题');
+  await app.runTimers(520);
+  await next;
+  app.spoken[1].handlers.start();
+  oldSpeech.handlers.end();
+  oldSpeech.handlers.error({ error: 'interrupted' });
+  assert.equal(app.runtime.flow.state, 'speaking');
+  assert.equal(app.elements.sendButton.disabled, true);
+  app.spoken[1].handlers.end();
+  assert.equal(app.elements.sendButton.disabled, false);
+});
+
+test('播报交互：长文按长度延长播放预算，正常结束后清除恢复定时器', async (t) => {
+  const app = fixture(t, async () => ({ ok: true, json: async () => ({ answer: '继续介绍活动详情。'.repeat(20) }) }), { manualTimers: true });
+  const pending = app.askQuestion('详细介绍');
+  await app.runTimers(520);
+  await pending;
+  app.spoken[0].handlers.start();
+  await app.runTimers(60_000);
+  assert.equal(app.runtime.flow.state, 'speaking');
+  app.spoken[0].handlers.end();
+  await app.runTimers(240_000);
+  assert.equal(app.events.some(event => event.errorCode === 'SPEECH_PLAYBACK_TIMEOUT'), false);
+});
+
+test('男声：声音列表为空、只有女声或未知中文声音时不使用系统默认，超时转文字并恢复输入', async (t) => {
+  for (const voices of [[], [{ name: '婷婷', lang: 'zh-CN' }], [{ name: 'Chinese', lang: 'zh-CN', default: true }]]) {
+    const app = fixture(t, answerResponse, { manualTimers: true });
+    prepareComposer(app);
+    app.browser.speechSynthesis.getVoices = () => voices;
+    app.evaluate('prepareSpeechVoices()');
+    const pending = app.askQuestion('第一题');
+    await app.runTimers(520);
+    await pending;
+    app.elements.questionInput.value = '下一题';
+    assert.equal(app.spoken.length, 0);
+    assert.equal(app.elements.sendButton.disabled, true);
+    await app.runTimers(1_500);
+    assert.equal(app.spoken.length, 0);
+    assert.equal(app.runtime.flow.state, 'idle');
+    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.elements.questionInput.value, '下一题');
+    assert.match(app.elements.composerHint.textContent, /男声.*文字/);
+    assert.ok(app.events.some(event => event.errorCode === 'MALE_VOICE_UNAVAILABLE'));
+  }
+});
+
+test('男声：延迟加载只启动一次，已锁定音色暂时消失时等待恢复而不使用女声', async (t) => {
+  const app = fixture(t, answerResponse, { manualTimers: true });
+  const male = app.browser.speechSynthesis.getVoices()[0];
+  app.evaluate('prepareSpeechVoices()');
+  app.browser.speechSynthesis.getVoices = () => [{ name: '婷婷', lang: 'zh-CN' }];
+  app.voicesChanged();
+  const pending = app.askQuestion('第一题');
+  await app.runTimers(520);
+  await pending;
+  assert.equal(app.spoken.length, 0, 'never speak with a stale voice object');
+  app.browser.speechSynthesis.getVoices = () => [{ ...male }];
+  app.voicesChanged();
+  app.voicesChanged();
+  assert.equal(app.spoken.length, 1);
+  assert.equal(app.spoken[0].voice.voiceURI, male.voiceURI);
+  assert.equal(app.runtime.flow.reason, 'audio-preparing');
+  app.spoken[0].handlers.start();
+  await app.runTimers(1_500);
+  assert.equal(app.runtime.flow.state, 'speaking');
+  assert.equal(app.spoken.length, 1);
+});
+
+test('男声：等待音色时被后台停止，迟到的 voiceschanged 不会复活播报', async (t) => {
+  const app = fixture(t, undefined, { manualTimers: true });
+  const male = app.browser.speechSynthesis.getVoices()[0];
+  app.browser.speechSynthesis.getVoices = () => [];
+  app.evaluate('prepareSpeechVoices()');
+  const live = store();
+  app.handleLiveEvent({ data: JSON.stringify(live.present('opening')) });
+  assert.equal(app.spoken.length, 0);
+  app.handleLiveEvent({ data: JSON.stringify(live.stop()) });
+  app.browser.speechSynthesis.getVoices = () => [male];
+  app.voicesChanged();
+  await app.runTimers(10_000);
+  assert.equal(app.spoken.length, 0);
+  assert.equal(app.runtime.flow.state, 'idle');
+});
+
+test('录音竞态：中止后的迟到 start/result/error 不改变草稿或恢复录音', (t) => {
+  const app = fixture(t);
+  prepareComposer(app);
+  app.runtime.voiceInput.start();
+  app.runtime.voiceInput.abort();
+  app.elements.questionInput.value = '正在准备的下一题';
+  const voice = app.runtime.voiceInput;
+  voice.handleStart();
+  voice.handleResult({ results: [Object.assign([{ transcript: '过时的识别文本' }], { isFinal: true })] });
+  voice.handleError({ error: 'network' });
+  voice.handleEnd();
+  assert.equal(voice.active, false);
+  assert.equal(app.elements.questionInput.value, '正在准备的下一题');
+  assert.equal(voice.errorMessage, '');
+});
+
+test('录音竞态：延迟自动提交前取消或修改草稿，不发送后来输入的新问题', async (t) => {
+  for (const action of ['abort', 'edit']) {
+    const app = fixture(t, answerResponse, { manualTimers: true });
+    prepareComposer(app);
+    const voice = app.runtime.voiceInput;
+    voice.start();
+    voice.handleStart();
+    voice.handleResult({ results: [Object.assign([{ transcript: '识别结果' }], { isFinal: true })] });
+    voice.handleEnd();
+    if (action === 'abort') voice.abort();
+    else app.elements.questionInput.value = '用户改写的草稿';
+    await app.runTimers(0);
+    assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 0);
+  }
+});
+
+test('录音竞态：重新录音后，旧实例的所有迟到事件都不能覆盖新会话', (t) => {
+  const app = fixture(t);
+  prepareComposer(app);
+  const voice = app.runtime.voiceInput;
+  voice.start();
+  const old = voice.recognition;
+  voice.abort();
+  voice.start();
+  const current = voice.recognition;
+  assert.notEqual(current, old);
+  current.onstart();
+  app.elements.questionInput.value = '新会话中的文字';
+  old.onstart();
+  old.onresult({ results: [Object.assign([{ transcript: '旧的识别结果' }], { isFinal: true })] });
+  old.onerror({ error: 'network' });
+  old.onend();
+  assert.equal(voice.active, true);
+  assert.equal(voice.errorMessage, '');
+  assert.equal(app.elements.questionInput.value, '新会话中的文字');
+});
+
+test('录音正常路径：结束后自动提交一次，播报结束后可开始下一次录音', async (t) => {
+  const app = fixture(t, answerResponse, { manualTimers: true });
+  prepareComposer(app);
+  const voice = app.runtime.voiceInput;
+  voice.start();
+  voice.recognition.onstart();
+  voice.recognition.onresult({ results: [Object.assign([{ transcript: '语音问题' }], { isFinal: true })] });
+  voice.recognition.onend();
+  await app.runTimers(520);
+  assert.equal(app.fetchCalls.filter(call => call.url === '/answer').length, 1);
+  assert.equal(app.elements.questionInput.value, '');
+  assert.equal(app.spoken.length, 1);
+  app.spoken[0].handlers.start();
+  app.spoken[0].handlers.end();
+  voice.start();
+  assert.equal(voice.active, true);
+  assert.equal(voice.recognition.starts, 1);
+});
+
+test('语音设备异常：枚举音色或创建 utterance 抛错都能恢复提问，不使用默认女声', async (t) => {
+  for (const failure of ['voices', 'utterance']) {
+    const app = fixture(t, answerResponse, { manualTimers: true });
+    prepareComposer(app);
+    if (failure === 'voices') app.browser.speechSynthesis.getVoices = () => { throw new Error('device unavailable'); };
+    else app.evaluate('globalThis.SpeechSynthesisUtterance = class { constructor() { throw new Error("device unavailable"); } };');
+    app.evaluate('prepareSpeechVoices()');
+    const pending = app.askQuestion('第一题');
+    await app.runTimers(2_020);
+    await pending;
+    assert.equal(app.spoken.length, 0);
+    assert.equal(app.elements.sendButton.disabled, false);
+    assert.equal(app.runtime.flow.state, 'idle');
+  }
 });

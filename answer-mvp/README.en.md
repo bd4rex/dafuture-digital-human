@@ -134,7 +134,13 @@ Another script -> immediately interrupts the previous playback
 Stop -> hosting standby; return to dialogue -> Q&A restored
 ```
 
-Speech currently uses the browser's local speech synthesis and prefers Mandarin male voices. macOS/Chrome selects `Reed` first, followed by `Eddy`, `Rocko`, and common Windows male voices such as Yunxi, Yunjian, Yunyang, and Kangkang. Rate and pitch are configured in the `speech` section of `public/avatar-config.json`. If none of these voices is installed, the browser falls back to an available local Chinese voice; use server-side TTS in production when every device must use the same voice. Unavailable video or reduced motion retains a static poster of the same male character. Autoplay restrictions offer tap-to-play, and loading failures offer reload, without preventing Q&A.
+Speech uses browser synthesis and an approved male-voice list in `speech.preferredVoiceNames` in `public/avatar-config.json`: `Reed`, then `Eddy`, `Rocko`, Yunxi, Yunjian, Yunyang, Kangkang, and the other configured names. The selected identity stays fixed for the page, even if the voice list is reordered or temporarily loses that voice. Initial loading or a missing selected voice receives up to 1.5 seconds; if still unavailable, the page retains text and explains the limitation without invoking a default or alternative voice. Web Speech has no gender field, so operators must verify the actual voice before adding a name. Cross-device voice consistency still requires server-side TTS. Rate and pitch remain configurable under `speech`. [Browser voice attributes](https://developer.mozilla.org/en-US/docs/Web/API/SpeechSynthesisVoice)
+
+While an answer is generating, preparing audio, or speaking, visitors can draft the next question. Send, microphone, quick-question, and four-state test buttons are temporarily disabled. Enter or repeated callbacks cannot cancel the current turn or clear the draft. Completion restores sending; users explicitly send the draft rather than having it automatically queued. IME confirmation keys do not submit questions. Explicit mute, operator takeover/stop, and control disconnection retain their interruption semantics.
+
+Speech failure, a missing approved voice, or startup timeout restores the composer. A generous playback watchdog based on text length and rate (at least 60 seconds) also recovers if the engine loses its completion event; stale callbacks cannot end a newer turn. Separate recognition sessions prevent cancelled recordings from overwriting drafts with late results.
+
+Unavailable video or reduced motion retains a static poster of the same male character. Autoplay restrictions offer tap-to-play, and loading failures offer reload, without preventing Q&A.
 
 The mobile layout keeps the composer on the first screen, scrolls dialogue independently, and adapts to safe areas, keyboard viewport height, and landscape. There is no initial welcome bubble or source label. MP4 removes the alpha-decoding requirement, but playback and speech policies still require target-device WeChat acceptance.
 
@@ -150,7 +156,7 @@ Both `speech.provider` and `speechInput.provider` in `public/avatar-config.json`
 - A TTS provider converts `speechText` into playable audio and drives the existing avatar state machine through start, end, and cancellation events.
 - Third-party API keys remain server-side; the browser calls this project's speech proxy and never holds provider credentials. This does not require restoring the removed administration-origin restrictions.
 - Browser recognition may use a vendor-operated remote service and must not be assumed to run locally. Choose and configure production ASR according to privacy requirements before handling sensitive student or visitor information.
-- The browser provider can remain as a fallback, while identical voice-and-text output can be cached by hash to reduce latency and provider cost.
+- Browser fallback is allowed only when the approved male voice is available and meets the voice policy; otherwise retain text without silently switching voices. Identical voice-and-text output can be cached by hash to reduce latency and provider cost.
 
 Preview all four states manually:
 
@@ -285,7 +291,7 @@ Tests cover administration sessions, full dialogue logs/redaction, upstream 401/
 
 Use `npm run test:review` as the strict review gate: known-finding assertions run as ordinary failures instead of TODOs. TODOs in `npm test` are not passes. See the [expanded test and review report](TEST_REVIEW_20260912.en.md) and [testing guide](TESTING.md).
 
-After the September 13, 2026 presenting-asset update, ordinary and strict suites both pass 228/228 tests with zero TODOs, adding independent hosting-media and matching poster-cache checks. The prior 227 tests cover bounded management recovery, partial log writes, stale queue acknowledgments, speech-failure hints, and test cleanup ordering; see the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
+After the September 15, 2026 speech-interaction hardening, ordinary and strict suites both pass 243/243 tests with zero TODOs. Fifteen additions to the 228-test baseline cover editable drafts, duplicate submission, IME keys, guarded controls, delayed/missing/pinned male voices, playback recovery, and stale recognition events. Previous media and recovery coverage remains; see the [third-round verification](FIX_REVIEW_20260913_R3.en.md). The [second-round concurrency/cancellation report](FIX_REVIEW_20260913_R2.en.md) and [first-round format/transport report](FIX_REVIEW_20260913.en.md) remain historical. Passing tests do not imply real-provider, device, or deployment acceptance.
 
 ## Docker
 
